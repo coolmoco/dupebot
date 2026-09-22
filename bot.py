@@ -2,6 +2,8 @@ import os
 import io
 import random
 import time
+from threading import Thread
+from flask import Flask
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
@@ -12,7 +14,25 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not found in environment variables!")
+    raise ValueError("BOT_TOKEN not found in .env file!")
+
+# --- Flask Server setup for Render (24/7 Keep Alive) ---
+app_flask = Flask(__name__)
+
+@app_flask.route('/')
+def home():
+    return "Bot is alive and running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+# ------------------------------------------------------
+
 
 def enhance_image(image: Image.Image) -> Image.Image:
     if image.mode != "RGB":
@@ -164,6 +184,9 @@ async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # Start Flask server in background thread for 24/7 uptime
+    keep_alive()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -173,7 +196,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text))
 
-    print("Bot starting with polling...")
+    print("Final Bot started...")
     app.run_polling(drop_pending_updates=True)
 
 
