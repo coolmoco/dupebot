@@ -2,7 +2,6 @@ import os
 import io
 import random
 import time
-from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
 from telegram import Update
@@ -24,14 +23,8 @@ def home():
     return "Bot is alive and running!"
 
 def run_flask():
-    # Render assigns a dynamic port via environment variable PORT
-    port = int(os.environ.get("PORT", 8080))
-    app_flask.run(host="0.0.0.0", port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port, use_reloader=False)
 # ------------------------------------------------------
 
 
@@ -185,8 +178,11 @@ async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    # Start Flask server in background thread for 24/7 uptime
-    keep_alive()
+    import threading
+    # Start Flask server cleanly in a daemon thread without reloader
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
