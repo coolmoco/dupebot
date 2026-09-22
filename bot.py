@@ -14,7 +14,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not found in .env file!")
+    raise ValueError("BOT_TOKEN not found in environment variables!")
 
 # --- Flask Server setup for Render (24/7 Keep Alive) ---
 app_flask = Flask(__name__)
@@ -24,6 +24,7 @@ def home():
     return "Bot is alive and running!"
 
 def run_flask():
+    # Render assigns a dynamic port via environment variable PORT
     port = int(os.environ.get("PORT", 8080))
     app_flask.run(host="0.0.0.0", port=port)
 
