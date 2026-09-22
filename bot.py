@@ -2,7 +2,6 @@ import os
 import io
 import random
 import time
-import threading
 from flask import Flask
 from dotenv import load_dotenv
 from telegram import Update
@@ -16,19 +15,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in environment variables!")
 
-# --- Telegram Bot Runner in Background Thread ---
-def run_telegram_bot():
-    app = Application.builder().token(BOT_TOKEN).build()
+# --- Flask App for Render Keep-Alive ---
+app_flask = Flask(__name__)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("about", about))
-    app.add_handler(CommandHandler("how", how))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text))
-
-    print("Telegram Bot started in background thread...")
-    app.run_polling(drop_pending_updates=True)
+@app_flask.route('/')
+def home():
+    return "Bot is alive and running!"
 
 def enhance_image(image: Image.Image) -> Image.Image:
     if image.mode != "RGB":
@@ -179,22 +171,32 @@ async def unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-# --- Flask Server setup on Main Thread for Render ---
-app_flask = Flask(__name__)
-
-@app_flask.route('/')
-def home():
-    return "Bot is alive and running!"
-
 def main():
-    # Start Telegram Bot in a separate background thread
-    bot_thread = threading.Thread(target=run_telegram_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
+    # Start Telegram Bot in the main thread directly
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    # Run Flask on the Main Thread so Render's port binding stays happy
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host="0.0.0.0", port=port)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("about", about))
+    app.add_handler(CommandHandler("how", how))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text))
+
+    print("Telegram Bot starting via polling...")
+    
+    # Note: On Render Web Service, if we only run polling, 
+    # Render requires a web port to be bound, otherwise it throws 502/port error.
+    # Let's run Flask in a background thread properly using a daemon thread.
+    import threading
+    def run_flask():
+        port = int(os.environ.get("PORT", 10000))
+        app_flask.run(host="0.0.0.0", port=port, use_reloader=False)
+
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
