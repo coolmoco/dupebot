@@ -528,10 +528,9 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
     folder = f"tt_{unique_id}_dir"
     os.makedirs(folder, exist_ok=True)
     paths = []
-    opened_files = []
 
     try:
-        # 1. Try yt-dlp (videos)
+        # 1. Try yt-dlp first (best for videos)
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tt_{unique_id}.%(ext)s"),
             "format": "best",
@@ -557,9 +556,9 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                         paths.append(candidate)
                         break
         except Exception as e:
-            print(f"yt-dlp TikTok: {e}")
+            print(f"yt-dlp TikTok error: {e}")
 
-        # 2. Agar video nahi mila to gallery-dl try karo (photo slides)
+        # 2. If no video found → try gallery-dl for photo slides
         has_video = any(p.lower().endswith((".mp4", ".mkv", ".webm")) for p in paths)
         if not has_video:
             try:
@@ -580,7 +579,7 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
             except Exception as e:
                 print(f"gallery-dl error: {e}")
 
-        # 3. Send media
+        # 3. Send results
         images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
         videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
         audios = [p for p in paths if p.lower().endswith((".mp3", ".m4a"))]
@@ -588,11 +587,10 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         success = False
 
         if images:
+            # Send as media group (max 10)
             media = []
             for p in images[:10]:
-                f = open(p, "rb")
-                opened_files.append(f)
-                media.append(InputMediaPhoto(f))
+                media.append(InputMediaPhoto(open(p, "rb")))
             await update.message.reply_media_group(media=media)
             success = True
 
@@ -625,33 +623,25 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         except:
             pass
     finally:
-        # Pehle files close karo
-        for f in opened_files:
-            try:
-                f.close()
-            except:
-                pass
-
-        # Strong cleanup
+        # ========== PROPER CLEANUP ==========
+        # Delete all files inside the folder
         if os.path.exists(folder):
             try:
                 shutil.rmtree(folder, ignore_errors=True)
             except:
                 pass
 
-        try:
-            for item in os.listdir("."):
-                if item.startswith(f"tt_{unique_id}") or item.startswith(f"temp_{unique_id}"):
-                    path = os.path.join(".", item)
-                    try:
-                        if os.path.isdir(path):
-                            shutil.rmtree(path, ignore_errors=True)
-                        else:
-                            os.remove(path)
-                    except:
-                        pass
-        except:
-            pass
+        # Extra safety: remove any leftover files starting with tt_
+        for f in os.listdir("."):
+            if f.startswith(f"tt_{unique_id}"):
+                try:
+                    path = os.path.join(".", f)
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.remove(path)
+                except:
+                    pass
 
 # ------------------------------------------------------
 # Text handler
