@@ -3,6 +3,8 @@ import io
 import random
 import time
 import re
+import subprocess
+import shutil
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
@@ -45,7 +47,7 @@ def keep_alive():
 
 
 # ------------------------------------------------------
-# Strong unique image processing
+# Strong unique IMAGE processing
 # ------------------------------------------------------
 def enhance_image(image: Image.Image) -> Image.Image:
     if image.mode != "RGB":
@@ -111,16 +113,82 @@ def enhance_image(image: Image.Image) -> Image.Image:
 
 
 # ------------------------------------------------------
+# Unique VIDEO processing (KEEPS ASPECT RATIO)
+# ------------------------------------------------------
+def enhance_video(input_path: str, output_path: str) -> bool:
+    """
+    Keeps original aspect ratio (9:16 stays 9:16)
+    Light crop + strong color/noise/sharpen
+    """
+    brightness = random.uniform(-0.05, 0.07)
+    contrast   = random.uniform(1.07, 1.16)
+    saturation = random.uniform(1.10, 1.22)
+    gamma      = random.uniform(0.94, 1.07)
+    hue        = random.uniform(-5, 5)
+    noise_str  = random.randint(5, 11)
+    crop_pct   = random.uniform(0.012, 0.022)   # mild crop
+
+    # This filter keeps aspect ratio properly
+    vf = (
+        f"crop=iw*(1-{crop_pct}):ih*(1-{crop_pct}),"          # mild center crop
+        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"                 # force even size (keeps ratio)
+        f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma},"
+        f"hue=h={hue},"
+        f"noise=alls={noise_str}:allf=t,"
+        f"unsharp=5:5:1.3:5:5:0.6,"
+        f"format=yuv420p"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "faster",
+        "-crf", "16",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        output_path
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=300,
+            text=True
+        )
+
+        if result.returncode != 0:
+            print("===== FFMPEG ERROR =====")
+            print(result.stderr[-1000:] if result.stderr else "No stderr")
+            print("========================")
+            return False
+
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 20000
+
+    except Exception as e:
+        print(f"FFmpeg Exception: {e}")
+        return False
+
+
+# ------------------------------------------------------
 # Commands
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👋 Welcome!\n\n"
-        "I can do two things:\n\n"
-        "1️⃣ Send any photo → I will modify it so it looks different from the original.\n\n"
-        "2️⃣ Send any Instagram link (Post / Reel / Carousel) → "
-        "I will download the original high-quality media.\n\n"
-        "Just send a photo or an Instagram link."
+        "Welcome!\n\n"
+        "Just send me any image or video and I will give you a modified version.\n"
+        "The changes help make the content different from the original while keeping high visual quality.\n\n"
+        "You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+        "Commands:\n"
+        "/about - More information about this bot\n"
+        "/help  - How to use\n"
+        "/how   - How it works\n\n"
+        "In groups: You must mention me with the photo, video or link.\n\n"
+        "For any help contact: @coolmoco"
     )
     await update.message.reply_text(text)
 
@@ -134,8 +202,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/how    – How it works\n\n"
         "How to use:\n"
         "• Send any photo → get a unique modified version\n"
+        "• Send any video → get a unique high-quality version\n"
         "• Send Instagram Post / Reel / Carousel link → get original media\n\n"
-        "In groups: mention me with the photo or link."
+        "In groups: mention me with the photo, video or link."
     )
     await update.message.reply_text(text)
 
@@ -143,12 +212,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "About this Bot:\n\n"
-        "Send me any image and I will modify it so it becomes different from the original "
-        "while keeping high visual quality. This helps avoid Instagram’s duplicate / "
-        "unoriginal content restrictions.\n\n"
-        "You can also send any Instagram Post, Reel or Carousel link "
-        "and I will download the original high-quality media for you.\n\n"
-        "In groups: You must mention me with the photo or link.\n\n"
+        "• Just send me any image or video and I will give you a modified version.\n"
+        "• The changes help make the content different from the original while keeping high visual quality.\n"
+        "• You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+        "In groups: You must mention me with the photo, video or link.\n\n"
         "For any help contact: @coolmoco"
     )
     await update.message.reply_text(text)
@@ -157,11 +224,15 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "How it works:\n\n"
-        "📷 Photo mode:\n"
+        "Photo mode:\n"
         "1. You send a photo\n"
-        "2. I modify it to make it unique\n"
+        "2. I apply unique modifications\n"
         "3. You get a new version\n\n"
-        "🔗 Instagram link mode:\n"
+        "Video mode:\n"
+        "1. You send a video\n"
+        "2. I apply unique changes (light crop, color, noise, sharpen)\n"
+        "3. You get a high-quality unique version\n\n"
+        "Instagram link mode:\n"
         "1. You send a Post / Reel / Carousel link\n"
         "2. I download the original media\n"
         "3. You receive it in high quality\n\n"
@@ -228,10 +299,94 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ------------------------------------------------------
-# Instagram downloader (using instaloader - better for posts)
+# Video handler
+# ------------------------------------------------------
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    if message.chat.type in ["group", "supergroup"]:
+        bot_username = (await context.bot.get_me()).username.lower()
+        caption = (message.caption or "").lower()
+        mentioned = f"@{bot_username}" in caption
+
+        is_reply_to_bot = False
+        if message.reply_to_message and message.reply_to_message.from_user:
+            if (
+                message.reply_to_message.from_user.is_bot
+                and message.reply_to_message.from_user.username
+                and message.reply_to_message.from_user.username.lower() == bot_username
+            ):
+                is_reply_to_bot = True
+
+        if not mentioned and not is_reply_to_bot:
+            return
+
+    status_msg = None
+    unique_id = str(int(time.time() * 1000))
+    input_path = f"input_{unique_id}.mp4"
+    output_path = f"output_{unique_id}.mp4"
+    video_sent = False
+
+    try:
+        status_msg = await message.reply_text("⏳ Please wait… it usually takes 30-40 seconds.")
+
+        if message.video:
+            file = await context.bot.get_file(message.video.file_id)
+        elif message.document and message.document.mime_type and "video" in message.document.mime_type:
+            file = await context.bot.get_file(message.document.file_id)
+        else:
+            if status_msg:
+                await status_msg.edit_text("❌ Unsupported video format.")
+            return
+
+        await file.download_to_drive(input_path)
+
+        success = enhance_video(input_path, output_path)
+
+        if success and os.path.exists(output_path):
+            with open(output_path, "rb") as vid:
+                await message.reply_video(
+                    video=vid,
+                    caption="✅ Here’s your modified video",
+                    supports_streaming=True,
+                )
+            video_sent = True
+
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except:
+                    pass
+        else:
+            if not video_sent and status_msg:
+                try:
+                    await status_msg.edit_text("❌ Failed to process the video.")
+                except:
+                    pass
+
+    except Exception as e:
+        print(f"Video error: {e}")
+        if not video_sent and status_msg:
+            try:
+                await status_msg.edit_text("❌ Failed to process the video.")
+            except:
+                pass
+
+    finally:
+        for p in [input_path, output_path]:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except:
+                    pass
+
+
+# ------------------------------------------------------
+# Instagram downloader
 # ------------------------------------------------------
 def download_instagram(url: str, unique_id: str):
-    """Returns list of file paths"""
     L = instaloader.Instaloader(
         download_videos=True,
         download_video_thumbnails=False,
@@ -265,15 +420,11 @@ def download_instagram(url: str, unique_id: str):
     os.makedirs(folder, exist_ok=True)
 
     try:
-        # Download the post
         L.download_post(post, target=folder)
-
-        # Collect all downloaded media
         for file in os.listdir(folder):
             full = os.path.join(folder, file)
             if file.endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4")):
                 paths.append(full)
-
     except Exception as e:
         print(f"Download post error: {e}")
 
@@ -290,16 +441,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = message.text.strip()
 
-    # Random text → About
     if not text.startswith("http"):
         about_text = (
             "About this Bot:\n\n"
-            "Send me any image and I will modify it so it becomes different from the original "
-            "while keeping high visual quality. This helps avoid Instagram’s duplicate / "
-            "unoriginal content restrictions.\n\n"
-            "You can also send any Instagram Post, Reel or Carousel link "
-            "and I will download the original high-quality media for you.\n\n"
-            "In groups: You must mention me with the photo or link.\n\n"
+            "• Just send me any image or video and I will give you a modified version.\n"
+            "• The changes help make the content different from the original while keeping high visual quality.\n"
+            "• You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+            "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact: @coolmoco"
         )
         await message.reply_text(about_text)
@@ -309,7 +457,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("❌ Only Instagram links are supported.")
         return
 
-    # Group check
     if message.chat.type in ["group", "supergroup"]:
         bot_username = (await context.bot.get_me()).username.lower()
         mentioned = f"@{bot_username}" in text.lower()
@@ -339,7 +486,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         paths = download_instagram(clean_url, unique_id)
 
         if not paths:
-            # Fallback to yt-dlp for reels if instaloader fails
             ydl_opts = {
                 "outtmpl": f"ig_{unique_id}.%(ext)s",
                 "quiet": True,
@@ -360,9 +506,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             videos = [p for p in paths if p.lower().endswith(".mp4")]
 
             if images:
-                media = []
-                for p in images[:10]:
-                    media.append(InputMediaPhoto(open(p, "rb")))
+                media = [InputMediaPhoto(open(p, "rb")) for p in images[:10]]
                 await message.reply_media_group(media=media)
                 success = True
 
@@ -397,7 +541,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     finally:
-        # Cleanup
         for p in paths:
             try:
                 if os.path.exists(p):
@@ -407,7 +550,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         folder = f"temp_{unique_id}"
         if os.path.exists(folder):
             try:
-                import shutil
                 shutil.rmtree(folder)
             except:
                 pass
@@ -427,6 +569,7 @@ def main():
     app.add_handler(CommandHandler("how", how))
 
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot started successfully...")
