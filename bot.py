@@ -150,42 +150,69 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         return False
 
 # ------------------------------------------------------
-# Commands
+# Commands (detailed original style)
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Welcome!\n\n"
         "Just send me any image or video and I will give you a modified version.\n"
-        "You can also send Instagram / YouTube / TikTok links.\n\n"
-        "Commands: /help /about /how\n\n"
-        "In groups: mention me with the media or link.\n\n"
-        "Contact: @coolmoco"
+        "The changes help make the content different from the original while keeping high visual quality.\n\n"
+        "You can also send any Instagram, YouTube or TikTok link and I will download it for you.\n\n"
+        "Commands:\n"
+        "/about - More information about this bot\n"
+        "/help  - How to use\n"
+        "/how   - How it works\n\n"
+        "In groups: You must mention me with the photo, video or link.\n\n"
+        "For any help contact: @coolmoco"
     )
     await update.message.reply_text(text)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Send photo → unique version\n"
-        "Send video → unique version\n"
-        "Send YouTube / TikTok / Instagram link → download\n\n"
+    text = (
+        "Available Commands:\n\n"
+        "/start  – Start the bot\n"
+        "/help   – Show this help\n"
+        "/about  – About this bot\n"
+        "/how    – How it works\n\n"
+        "How to use:\n"
+        "• Send any photo → get a unique modified version\n"
+        "• Send any video → get a unique high-quality version\n"
+        "• Send Instagram / YouTube / TikTok link → download media\n\n"
         "• YouTube Shorts → direct download\n"
-        "• Normal YouTube videos → quality select\n\n"
-        "In groups mention the bot."
+        "• Normal YouTube videos → quality selection\n\n"
+        "In groups: mention me with the photo, video or link."
     )
+    await update.message.reply_text(text)
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Bot modifies photos & videos uniquely.\n"
-        "Also downloads from YouTube, TikTok, Instagram.\n\n"
-        "Contact: @coolmoco"
+    text = (
+        "About this Bot:\n\n"
+        "• Just send me any image or video and I will give you a modified version.\n"
+        "• The changes help make the content different from the original while keeping high visual quality.\n"
+        "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
+        "In groups: You must mention me with the photo, video or link.\n\n"
+        "For any help contact: @coolmoco"
     )
+    await update.message.reply_text(text)
 
 async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Photo/Video → I modify them\n"
-        "Link → I download them\n"
-        "That's it."
+    text = (
+        "How it works:\n\n"
+        "Photo mode:\n"
+        "1. You send a photo\n"
+        "2. I apply unique modifications\n"
+        "3. You get a new version\n\n"
+        "Video mode:\n"
+        "1. You send a video\n"
+        "2. I apply unique changes (light crop, color, noise, sharpen)\n"
+        "3. You get a high-quality unique version\n\n"
+        "Link mode (Instagram / YouTube / TikTok):\n"
+        "1. You send a link\n"
+        "2. I download the media\n"
+        "3. You receive it\n\n"
+        "In groups: always mention me."
     )
+    await update.message.reply_text(text)
 
 # ------------------------------------------------------
 # Image handler
@@ -345,7 +372,7 @@ def download_instagram(url: str, unique_id: str):
     return paths
 
 # ------------------------------------------------------
-# YouTube Shorts - Direct download
+# YouTube Shorts - Direct download (with better anti-bot)
 # ------------------------------------------------------
 async def download_youtube_shorts(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     status_msg = await update.message.reply_text("⏳ Downloading YouTube Short...")
@@ -360,12 +387,17 @@ async def download_youtube_shorts(update: Update, context: ContextTypes.DEFAULT_
             "quiet": True,
             "no_warnings": True,
             "socket_timeout": 40,
-            "retries": 8,
-            "fragment_retries": 8,
+            "retries": 10,
+            "fragment_retries": 10,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
             },
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "web"],
+                }
+            },
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -397,7 +429,7 @@ async def download_youtube_shorts(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         print(f"Shorts error: {e}")
         try:
-            await status_msg.edit_text(f"❌ Failed to download Short.\n{str(e)[:100]}")
+            await status_msg.edit_text(f"❌ Failed to download Short.\n{str(e)[:150]}")
         except:
             pass
     finally:
@@ -409,7 +441,7 @@ async def download_youtube_shorts(update: Update, context: ContextTypes.DEFAULT_
                     pass
 
 # ------------------------------------------------------
-# YouTube quality buttons (only normal long videos)
+# YouTube quality buttons
 # ------------------------------------------------------
 async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     context.user_data["yt_url"] = url
@@ -453,13 +485,18 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 30,
-            "retries": 8,
-            "fragment_retries": 8,
+            "socket_timeout": 40,
+            "retries": 10,
+            "fragment_retries": 10,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
             },
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "web"],
+                }
+            },
         }
 
         if quality == "audio":
@@ -509,7 +546,7 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Done!")
     except Exception as e:
         print(f"YouTube error: {e}")
-        await query.edit_message_text(f"❌ Failed: {str(e)[:100]}")
+        await query.edit_message_text(f"❌ Failed: {str(e)[:150]}")
     finally:
         for f in os.listdir("."):
             if f.startswith(f"dl_{unique_id}"):
@@ -520,7 +557,7 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("yt_url", None)
 
 # ------------------------------------------------------
-# TikTok (Video + Photo Slides) with proper cleanup
+# TikTok
 # ------------------------------------------------------
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     status_msg = await update.message.reply_text("⏳ Downloading TikTok...")
@@ -528,9 +565,9 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
     folder = f"tt_{unique_id}_dir"
     os.makedirs(folder, exist_ok=True)
     paths = []
+    opened_files = []
 
     try:
-        # 1. Try yt-dlp first (best for videos)
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tt_{unique_id}.%(ext)s"),
             "format": "best",
@@ -556,9 +593,8 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                         paths.append(candidate)
                         break
         except Exception as e:
-            print(f"yt-dlp TikTok error: {e}")
+            print(f"yt-dlp TikTok: {e}")
 
-        # 2. If no video found → try gallery-dl for photo slides
         has_video = any(p.lower().endswith((".mp4", ".mkv", ".webm")) for p in paths)
         if not has_video:
             try:
@@ -579,7 +615,6 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
             except Exception as e:
                 print(f"gallery-dl error: {e}")
 
-        # 3. Send results
         images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
         videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
         audios = [p for p in paths if p.lower().endswith((".mp3", ".m4a"))]
@@ -587,10 +622,11 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         success = False
 
         if images:
-            # Send as media group (max 10)
             media = []
             for p in images[:10]:
-                media.append(InputMediaPhoto(open(p, "rb")))
+                f = open(p, "rb")
+                opened_files.append(f)
+                media.append(InputMediaPhoto(f))
             await update.message.reply_media_group(media=media)
             success = True
 
@@ -623,25 +659,31 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
         except:
             pass
     finally:
-        # ========== PROPER CLEANUP ==========
-        # Delete all files inside the folder
+        for f in opened_files:
+            try:
+                f.close()
+            except:
+                pass
+
         if os.path.exists(folder):
             try:
                 shutil.rmtree(folder, ignore_errors=True)
             except:
                 pass
 
-        # Extra safety: remove any leftover files starting with tt_
-        for f in os.listdir("."):
-            if f.startswith(f"tt_{unique_id}"):
-                try:
-                    path = os.path.join(".", f)
-                    if os.path.isdir(path):
-                        shutil.rmtree(path, ignore_errors=True)
-                    else:
-                        os.remove(path)
-                except:
-                    pass
+        try:
+            for item in os.listdir("."):
+                if item.startswith(f"tt_{unique_id}") or item.startswith(f"temp_{unique_id}"):
+                    path = os.path.join(".", item)
+                    try:
+                        if os.path.isdir(path):
+                            shutil.rmtree(path, ignore_errors=True)
+                        else:
+                            os.remove(path)
+                    except:
+                        pass
+        except:
+            pass
 
 # ------------------------------------------------------
 # Text handler
@@ -656,10 +698,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text.startswith("http"):
         await message.reply_text(
             "About this Bot:\n\n"
-            "• Send any image or video → modified version\n"
-            "• Send Instagram / YouTube / TikTok link → download\n\n"
-            "In groups: mention me.\n\n"
-            "Contact: @coolmoco"
+            "• Just send me any image or video and I will give you a modified version.\n"
+            "• The changes help make the content different from the original while keeping high visual quality.\n"
+            "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
+            "In groups: You must mention me with the photo, video or link.\n\n"
+            "For any help contact: @coolmoco"
         )
         return
 
@@ -677,7 +720,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lower = text.lower()
 
-    # YouTube
     if "youtube.com" in lower or "youtu.be" in lower:
         if "/shorts/" in lower:
             await download_youtube_shorts(update, context, text)
@@ -685,12 +727,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_quality_buttons(update, context, text)
         return
 
-    # TikTok
     if "tiktok.com" in lower or "vt.tiktok.com" in lower or "vm.tiktok.com" in lower:
         await download_tiktok(update, context, text)
         return
 
-    # Instagram
     if "instagram.com" in lower:
         clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
         clean_url = clean_url.split("?")[0].rstrip("/")
