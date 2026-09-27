@@ -8,12 +8,11 @@ import shutil
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InputMediaPhoto
 from telegram.ext import (
     Application,
     MessageHandler,
     CommandHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -150,14 +149,14 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         return False
 
 # ------------------------------------------------------
-# Commands (detailed original style)
+# Commands
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "Welcome!\n\n"
         "Just send me any image or video and I will give you a modified version.\n"
         "The changes help make the content different from the original while keeping high visual quality.\n\n"
-        "You can also send any Instagram, YouTube or TikTok link and I will download it for you.\n\n"
+        "You can also send any Instagram or TikTok link and I will download it for you.\n\n"
         "Commands:\n"
         "/about - More information about this bot\n"
         "/help  - How to use\n"
@@ -177,9 +176,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "How to use:\n"
         "• Send any photo → get a unique modified version\n"
         "• Send any video → get a unique high-quality version\n"
-        "• Send Instagram / YouTube / TikTok link → download media\n\n"
-        "• YouTube Shorts → direct download\n"
-        "• Normal YouTube videos → quality selection\n\n"
+        "• Send Instagram / TikTok link → download media\n\n"
         "In groups: mention me with the photo, video or link."
     )
     await update.message.reply_text(text)
@@ -189,7 +186,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "About this Bot:\n\n"
         "• Just send me any image or video and I will give you a modified version.\n"
         "• The changes help make the content different from the original while keeping high visual quality.\n"
-        "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
+        "• You can also send any Instagram or TikTok link and I will download the media for you.\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
         "For any help contact: @coolmoco"
     )
@@ -206,7 +203,7 @@ async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. You send a video\n"
         "2. I apply unique changes (light crop, color, noise, sharpen)\n"
         "3. You get a high-quality unique version\n\n"
-        "Link mode (Instagram / YouTube / TikTok):\n"
+        "Link mode (Instagram / TikTok):\n"
         "1. You send a link\n"
         "2. I download the media\n"
         "3. You receive it\n\n"
@@ -372,191 +369,6 @@ def download_instagram(url: str, unique_id: str):
     return paths
 
 # ------------------------------------------------------
-# YouTube Shorts - Direct download (with better anti-bot)
-# ------------------------------------------------------
-async def download_youtube_shorts(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    status_msg = await update.message.reply_text("⏳ Downloading YouTube Short...")
-    unique_id = str(int(time.time() * 1000))
-    output_template = f"shorts_{unique_id}.%(ext)s"
-
-    try:
-        ydl_opts = {
-            "outtmpl": output_template,
-            "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "socket_timeout": 40,
-            "retries": 10,
-            "fragment_retries": 10,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios", "web"],
-                }
-            },
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-
-            base = filename.rsplit(".", 1)[0]
-            for ext in [".mp4", ".mkv", ".webm"]:
-                if os.path.exists(base + ext):
-                    filename = base + ext
-                    break
-
-        if not os.path.exists(filename):
-            await status_msg.edit_text("❌ Download failed.")
-            return
-
-        with open(filename, "rb") as video:
-            await update.message.reply_video(
-                video=video,
-                caption="✅ Here’s your YouTube Short",
-                supports_streaming=True,
-            )
-
-        try:
-            await status_msg.delete()
-        except:
-            pass
-
-    except Exception as e:
-        print(f"Shorts error: {e}")
-        try:
-            await status_msg.edit_text(f"❌ Failed to download Short.\n{str(e)[:150]}")
-        except:
-            pass
-    finally:
-        for f in os.listdir("."):
-            if f.startswith(f"shorts_{unique_id}"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-
-# ------------------------------------------------------
-# YouTube quality buttons
-# ------------------------------------------------------
-async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    context.user_data["yt_url"] = url
-    keyboard = [
-        [
-            InlineKeyboardButton("360p", callback_data="dl_360"),
-            InlineKeyboardButton("480p", callback_data="dl_480"),
-        ],
-        [
-            InlineKeyboardButton("720p", callback_data="dl_720"),
-            InlineKeyboardButton("1080p", callback_data="dl_1080"),
-        ],
-        [
-            InlineKeyboardButton("Audio Only", callback_data="dl_audio"),
-        ]
-    ]
-    await update.message.reply_text(
-        "Select quality:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    if not data.startswith("dl_"):
-        return
-
-    quality = data.replace("dl_", "")
-    url = context.user_data.get("yt_url")
-    if not url:
-        await query.edit_message_text("❌ Session expired. Send link again.")
-        return
-
-    await query.edit_message_text(f"⏳ Downloading {quality}...")
-    unique_id = str(int(time.time() * 1000))
-    output_template = f"dl_{unique_id}.%(ext)s"
-
-    try:
-        ydl_opts = {
-            "outtmpl": output_template,
-            "quiet": True,
-            "no_warnings": True,
-            "socket_timeout": 40,
-            "retries": 10,
-            "fragment_retries": 10,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "ios", "web"],
-                }
-            },
-        }
-
-        if quality == "audio":
-            ydl_opts.update({
-                "format": "bestaudio/best",
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }],
-            })
-        else:
-            height = {"360": 360, "480": 480, "720": 720, "1080": 1080}.get(quality, 720)
-            ydl_opts.update({
-                "format": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
-                "merge_output_format": "mp4",
-            })
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-
-            if quality == "audio":
-                base = filename.rsplit(".", 1)[0]
-                filename = base + ".mp3"
-            else:
-                base = filename.rsplit(".", 1)[0]
-                for ext in [".mp4", ".mkv", ".webm"]:
-                    if os.path.exists(base + ext):
-                        filename = base + ext
-                        break
-
-        if not os.path.exists(filename):
-            await query.edit_message_text("❌ Download failed.")
-            return
-
-        if quality == "audio":
-            with open(filename, "rb") as audio:
-                await query.message.reply_audio(audio=audio, caption="🎵 Audio ready")
-        else:
-            with open(filename, "rb") as video:
-                await query.message.reply_video(
-                    video=video,
-                    caption=f"✅ {quality} video ready",
-                    supports_streaming=True,
-                )
-        await query.edit_message_text("✅ Done!")
-    except Exception as e:
-        print(f"YouTube error: {e}")
-        await query.edit_message_text(f"❌ Failed: {str(e)[:150]}")
-    finally:
-        for f in os.listdir("."):
-            if f.startswith(f"dl_{unique_id}"):
-                try:
-                    os.remove(f)
-                except:
-                    pass
-        context.user_data.pop("yt_url", None)
-
-# ------------------------------------------------------
 # TikTok
 # ------------------------------------------------------
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
@@ -700,7 +512,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "About this Bot:\n\n"
             "• Just send me any image or video and I will give you a modified version.\n"
             "• The changes help make the content different from the original while keeping high visual quality.\n"
-            "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
+            "• You can also send any Instagram or TikTok link and I will download the media for you.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact: @coolmoco"
         )
@@ -720,17 +532,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lower = text.lower()
 
-    if "youtube.com" in lower or "youtu.be" in lower:
-        if "/shorts/" in lower:
-            await download_youtube_shorts(update, context, text)
-        else:
-            await show_quality_buttons(update, context, text)
-        return
-
+    # TikTok
     if "tiktok.com" in lower or "vt.tiktok.com" in lower or "vm.tiktok.com" in lower:
         await download_tiktok(update, context, text)
         return
 
+    # Instagram
     if "instagram.com" in lower:
         clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
         clean_url = clean_url.split("?")[0].rstrip("/")
@@ -793,7 +600,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
         return
 
-    await message.reply_text("❌ Only Instagram, YouTube and TikTok links supported.")
+    await message.reply_text("❌ Only Instagram and TikTok links are supported.")
 
 # ------------------------------------------------------
 # Main
@@ -808,7 +615,6 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(CallbackQueryHandler(quality_callback))
     print("Bot started successfully...")
     app.run_polling(drop_pending_updates=True)
 
