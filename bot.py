@@ -8,11 +8,12 @@ import shutil
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto
+from telegram import Update, InputMediaPhoto, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     MessageHandler,
     CommandHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -116,22 +117,17 @@ def enhance_image(image: Image.Image) -> Image.Image:
 # Unique VIDEO processing (KEEPS ASPECT RATIO)
 # ------------------------------------------------------
 def enhance_video(input_path: str, output_path: str) -> bool:
-    """
-    Keeps original aspect ratio (9:16 stays 9:16)
-    Light crop + strong color/noise/sharpen
-    """
     brightness = random.uniform(-0.05, 0.07)
     contrast   = random.uniform(1.07, 1.16)
     saturation = random.uniform(1.10, 1.22)
     gamma      = random.uniform(0.94, 1.07)
     hue        = random.uniform(-5, 5)
     noise_str  = random.randint(5, 11)
-    crop_pct   = random.uniform(0.012, 0.022)   # mild crop
+    crop_pct   = random.uniform(0.012, 0.022)
 
-    # This filter keeps aspect ratio properly
     vf = (
-        f"crop=iw*(1-{crop_pct}):ih*(1-{crop_pct}),"          # mild center crop
-        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"                 # force even size (keeps ratio)
+        f"crop=iw*(1-{crop_pct}):ih*(1-{crop_pct}),"
+        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
         f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma},"
         f"hue=h={hue},"
         f"noise=alls={noise_str}:allf=t,"
@@ -182,7 +178,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome!\n\n"
         "Just send me any image or video and I will give you a modified version.\n"
         "The changes help make the content different from the original while keeping high visual quality.\n\n"
-        "You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+        "You can also send any Instagram, YouTube or TikTok link and I will download it for you.\n\n"
         "Commands:\n"
         "/about - More information about this bot\n"
         "/help  - How to use\n"
@@ -203,7 +199,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "How to use:\n"
         "• Send any photo → get a unique modified version\n"
         "• Send any video → get a unique high-quality version\n"
-        "• Send Instagram Post / Reel / Carousel link → get original media\n\n"
+        "• Send Instagram / YouTube / TikTok link → download media\n\n"
         "In groups: mention me with the photo, video or link."
     )
     await update.message.reply_text(text)
@@ -214,7 +210,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "About this Bot:\n\n"
         "• Just send me any image or video and I will give you a modified version.\n"
         "• The changes help make the content different from the original while keeping high visual quality.\n"
-        "• You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+        "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
         "For any help contact: @coolmoco"
     )
@@ -232,10 +228,10 @@ async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. You send a video\n"
         "2. I apply unique changes (light crop, color, noise, sharpen)\n"
         "3. You get a high-quality unique version\n\n"
-        "Instagram link mode:\n"
-        "1. You send a Post / Reel / Carousel link\n"
-        "2. I download the original media\n"
-        "3. You receive it in high quality\n\n"
+        "Link mode (Instagram / YouTube / TikTok):\n"
+        "1. You send a link\n"
+        "2. I download the media\n"
+        "3. You receive it\n\n"
         "In groups: always mention me."
     )
     await update.message.reply_text(text)
@@ -432,6 +428,197 @@ def download_instagram(url: str, unique_id: str):
 
 
 # ------------------------------------------------------
+# YouTube quality selection
+# ------------------------------------------------------
+async def show_quality_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    keyboard = [
+        [
+            InlineKeyboardButton("360p", callback_data=f"dl_360|{url}"),
+            InlineKeyboardButton("480p", callback_data=f"dl_480|{url}"),
+        ],
+        [
+            InlineKeyboardButton("720p", callback_data=f"dl_720|{url}"),
+            InlineKeyboardButton("1080p", callback_data=f"dl_1080|{url}"),
+        ],
+        [
+            InlineKeyboardButton("Audio Only", callback_data=f"dl_audio|{url}"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "Select the quality you want:",
+        reply_markup=reply_markup
+    )
+
+
+async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("dl_"):
+        return
+
+    parts = data.split("|", 1)
+    if len(parts) != 2:
+        await query.edit_message_text("❌ Invalid selection.")
+        return
+
+    quality = parts[0].replace("dl_", "")
+    url = parts[1]
+
+    await query.edit_message_text(f"⏳ Downloading {quality}... Please wait.")
+
+    unique_id = str(int(time.time() * 1000))
+    output_template = f"dl_{unique_id}.%(ext)s"
+
+    try:
+        ydl_opts = {
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "retries": 5,
+            "fragment_retries": 5,
+        }
+
+        if quality == "audio":
+            ydl_opts.update({
+                "format": "bestaudio/best",
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+            })
+        else:
+            height_map = {
+                "360": 360,
+                "480": 480,
+                "720": 720,
+                "1080": 1080,
+            }
+            height = height_map.get(quality, 720)
+
+            ydl_opts.update({
+                "format": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
+                "merge_output_format": "mp4",
+            })
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+            if quality == "audio":
+                base = filename.rsplit(".", 1)[0]
+                filename = base + ".mp3"
+            else:
+                base = filename.rsplit(".", 1)[0]
+                for ext in [".mp4", ".mkv", ".webm"]:
+                    if os.path.exists(base + ext):
+                        filename = base + ext
+                        break
+
+        if not os.path.exists(filename):
+            await query.edit_message_text("❌ Download failed. File not found.")
+            return
+
+        if quality == "audio":
+            with open(filename, "rb") as audio:
+                await query.message.reply_audio(
+                    audio=audio,
+                    caption="🎵 Here’s your audio"
+                )
+        else:
+            with open(filename, "rb") as video:
+                await query.message.reply_video(
+                    video=video,
+                    caption=f"✅ Here’s your {quality} video",
+                    supports_streaming=True,
+                )
+
+        await query.edit_message_text("✅ Download complete!")
+
+    except Exception as e:
+        print(f"Download error: {e}")
+        await query.edit_message_text("❌ Failed to download. Please try again.")
+
+    finally:
+        for f in os.listdir("."):
+            if f.startswith(f"dl_{unique_id}"):
+                try:
+                    os.remove(f)
+                except:
+                    pass
+
+
+# ------------------------------------------------------
+# TikTok download (works with short + full links)
+# ------------------------------------------------------
+async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    status_msg = await update.message.reply_text("⏳ Downloading TikTok video...")
+
+    unique_id = str(int(time.time() * 1000))
+    output_template = f"tt_{unique_id}.%(ext)s"
+
+    try:
+        ydl_opts = {
+            "outtmpl": output_template,
+            "format": "best",
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 45,
+            "retries": 10,
+            "fragment_retries": 10,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Referer": "https://www.tiktok.com/",
+            },
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+
+            base = filename.rsplit(".", 1)[0]
+            for ext in [".mp4", ".mkv", ".webm"]:
+                if os.path.exists(base + ext):
+                    filename = base + ext
+                    break
+
+        if not os.path.exists(filename):
+            await status_msg.edit_text("❌ Failed to download TikTok video.")
+            return
+
+        with open(filename, "rb") as video:
+            await update.message.reply_video(
+                video=video,
+                caption="✅ Here’s your TikTok video",
+                supports_streaming=True,
+            )
+
+        try:
+            await status_msg.delete()
+        except:
+            pass
+
+    except Exception as e:
+        print(f"TikTok Download error: {e}")
+        await status_msg.edit_text(
+            "❌ Failed to download TikTok video.\n"
+            "Please try again or use a different link."
+        )
+
+    finally:
+        for f in os.listdir("."):
+            if f.startswith(f"tt_{unique_id}"):
+                try:
+                    os.remove(f)
+                except:
+                    pass
+
+
+# ------------------------------------------------------
 # Text handler
 # ------------------------------------------------------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -446,15 +633,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "About this Bot:\n\n"
             "• Just send me any image or video and I will give you a modified version.\n"
             "• The changes help make the content different from the original while keeping high visual quality.\n"
-            "• You can also send any Instagram Post, Reel or Carousel link and I will download the original high-quality media for you.\n\n"
+            "• You can also send any Instagram, YouTube or TikTok link and I will download the media for you.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact: @coolmoco"
         )
         await message.reply_text(about_text)
-        return
-
-    if "instagram.com" not in text.lower():
-        await message.reply_text("❌ Only Instagram links are supported.")
         return
 
     if message.chat.type in ["group", "supergroup"]:
@@ -473,86 +656,103 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not mentioned and not is_reply_to_bot:
             return
 
-    clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
-    clean_url = clean_url.split("?")[0].rstrip("/")
+    lower_text = text.lower()
 
-    status_msg = await message.reply_text("⚡ Downloading from Instagram…")
+    # YouTube → quality buttons
+    if "youtube.com" in lower_text or "youtu.be" in lower_text:
+        await show_quality_buttons(update, context, text)
+        return
 
-    unique_id = str(int(time.time() * 1000))
-    paths = []
-    success = False
+    # TikTok (both short and full links)
+    if "tiktok.com" in lower_text or "vt.tiktok.com" in lower_text or "vm.tiktok.com" in lower_text:
+        await download_tiktok(update, context, text)
+        return
 
-    try:
-        paths = download_instagram(clean_url, unique_id)
+    # Instagram
+    if "instagram.com" in lower_text:
+        clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
+        clean_url = clean_url.split("?")[0].rstrip("/")
 
-        if not paths:
-            ydl_opts = {
-                "outtmpl": f"ig_{unique_id}.%(ext)s",
-                "quiet": True,
-                "no_warnings": True,
-                "format": "best",
-                "http_headers": {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                },
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(clean_url, download=True)
-                filename = ydl.prepare_filename(info)
-                if os.path.exists(filename):
-                    paths = [filename]
+        status_msg = await message.reply_text("⚡ Downloading from Instagram…")
 
-        if paths:
-            images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
-            videos = [p for p in paths if p.lower().endswith(".mp4")]
+        unique_id = str(int(time.time() * 1000))
+        paths = []
+        success = False
 
-            if images:
-                media = [InputMediaPhoto(open(p, "rb")) for p in images[:10]]
-                await message.reply_media_group(media=media)
-                success = True
-
-            for v in videos:
-                with open(v, "rb") as vid:
-                    await message.reply_video(
-                        video=vid,
-                        caption="✨ Original quality video",
-                        supports_streaming=True,
-                    )
-                success = True
-
-        if success:
-            try:
-                await status_msg.delete()
-            except:
-                pass
-        else:
-            await status_msg.edit_text(
-                "❌ Failed to download.\n"
-                "Make sure the Instagram link is public."
-            )
-
-    except Exception as e:
-        print(f"Error: {e}")
         try:
-            await status_msg.edit_text(
-                "❌ Failed to download.\n"
-                "Make sure the Instagram link is public."
-            )
-        except:
-            pass
+            paths = download_instagram(clean_url, unique_id)
 
-    finally:
-        for p in paths:
+            if not paths:
+                ydl_opts = {
+                    "outtmpl": f"ig_{unique_id}.%(ext)s",
+                    "quiet": True,
+                    "no_warnings": True,
+                    "format": "best",
+                    "http_headers": {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    },
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(clean_url, download=True)
+                    filename = ydl.prepare_filename(info)
+                    if os.path.exists(filename):
+                        paths = [filename]
+
+            if paths:
+                images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+                videos = [p for p in paths if p.lower().endswith(".mp4")]
+
+                if images:
+                    media = [InputMediaPhoto(open(p, "rb")) for p in images[:10]]
+                    await message.reply_media_group(media=media)
+                    success = True
+
+                for v in videos:
+                    with open(v, "rb") as vid:
+                        await message.reply_video(
+                            video=vid,
+                            caption="✨ Original quality video",
+                            supports_streaming=True,
+                        )
+                    success = True
+
+            if success:
+                try:
+                    await status_msg.delete()
+                except:
+                    pass
+            else:
+                await status_msg.edit_text(
+                    "❌ Failed to download.\n"
+                    "Make sure the Instagram link is public."
+                )
+
+        except Exception as e:
+            print(f"Error: {e}")
             try:
-                if os.path.exists(p):
-                    os.remove(p)
+                await status_msg.edit_text(
+                    "❌ Failed to download.\n"
+                    "Make sure the Instagram link is public."
+                )
             except:
                 pass
-        folder = f"temp_{unique_id}"
-        if os.path.exists(folder):
-            try:
-                shutil.rmtree(folder)
-            except:
-                pass
+
+        finally:
+            for p in paths:
+                try:
+                    if os.path.exists(p):
+                        os.remove(p)
+                except:
+                    pass
+            folder = f"temp_{unique_id}"
+            if os.path.exists(folder):
+                try:
+                    shutil.rmtree(folder)
+                except:
+                    pass
+        return
+
+    await message.reply_text("❌ Only Instagram, YouTube and TikTok links are supported.")
 
 
 # ------------------------------------------------------
@@ -571,6 +771,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CallbackQueryHandler(quality_callback))
 
     print("Bot started successfully...")
     app.run_polling(drop_pending_updates=True)
