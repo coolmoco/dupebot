@@ -125,7 +125,7 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         "-vf", vf,
         "-c:v", "libx264",
         "-preset", "faster",
-        "-crf", "16",
+        "-crf", "18",
         "-c:a", "copy",
         "-movflags", "+faststart",
         "-pix_fmt", "yuv420p",
@@ -156,7 +156,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Welcome!\n\n"
         "Just send me any image or video and I will give you a modified version.\n"
         "The changes help make the content different from the original while keeping high visual quality.\n\n"
-        "You can also send any Instagram or TikTok link and I will download it for you.\n\n"
+        "You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download it for you in original quality.\n\n"
         "Commands:\n"
         "/about - More information about this bot\n"
         "/help  - How to use\n"
@@ -176,7 +176,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "How to use:\n"
         "• Send any photo → get a unique modified version\n"
         "• Send any video → get a unique high-quality version\n"
-        "• Send Instagram / TikTok link → download media\n\n"
+        "• Send 📸 Instagram / 🎵 TikTok / 𝕏 Twitter/X link → download media in original quality\n\n"
         "In groups: mention me with the photo, video or link."
     )
     await update.message.reply_text(text)
@@ -186,7 +186,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "About this Bot:\n\n"
         "• Just send me any image or video and I will give you a modified version.\n"
         "• The changes help make the content different from the original while keeping high visual quality.\n"
-        "• You can also send any Instagram or TikTok link and I will download the media for you.\n\n"
+        "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
         "For any help contact: @coolmoco"
     )
@@ -203,9 +203,9 @@ async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. You send a video\n"
         "2. I apply unique changes (light crop, color, noise, sharpen)\n"
         "3. You get a high-quality unique version\n\n"
-        "Link mode (Instagram / TikTok):\n"
+        "Link mode (📸 Instagram / 🎵 TikTok / 𝕏 Twitter/X):\n"
         "1. You send a link\n"
-        "2. I download the media\n"
+        "2. I download the media in original quality\n"
         "3. You receive it\n\n"
         "In groups: always mention me."
     )
@@ -300,16 +300,39 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = enhance_video(input_path, output_path)
 
         if success and os.path.exists(output_path):
-            with open(output_path, "rb") as vid:
-                await message.reply_video(
-                    video=vid,
-                    caption="✅ Here’s your modified video",
-                    supports_streaming=True,
-                )
+            file_size = os.path.getsize(output_path)
+
+            if file_size > 48 * 1024 * 1024:
+                compressed = f"compressed_{unique_id}.mp4"
+                cmd = [
+                    "ffmpeg", "-y", "-i", output_path,
+                    "-c:v", "libx264", "-preset", "faster", "-crf", "23",
+                    "-c:a", "copy", "-movflags", "+faststart",
+                    compressed
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+                if os.path.exists(compressed) and os.path.getsize(compressed) > 20000:
+                    os.remove(output_path)
+                    output_path = compressed
+
             try:
-                await status_msg.delete()
-            except:
-                pass
+                with open(output_path, "rb") as vid:
+                    await message.reply_video(
+                        video=vid,
+                        caption="✅ Here’s your modified video",
+                        supports_streaming=True,
+                    )
+                try:
+                    await status_msg.delete()
+                except:
+                    pass
+            except Exception as send_err:
+                err_str = str(send_err).lower()
+                if "413" in err_str or "too large" in err_str or "entity too large" in err_str:
+                    await status_msg.edit_text("❌ Video too large after processing (Telegram 50MB limit).")
+                else:
+                    await status_msg.edit_text("❌ Failed to send the video.")
+                    print(f"Send error: {send_err}")
         else:
             await status_msg.edit_text("❌ Failed to process the video.")
     except Exception as e:
@@ -324,6 +347,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if os.path.exists(p):
                 try:
                     os.remove(p)
+                except:
+                    pass
+        for f in os.listdir("."):
+            if f.startswith(f"compressed_{unique_id}"):
+                try:
+                    os.remove(f)
                 except:
                     pass
 
@@ -372,7 +401,8 @@ def download_instagram(url: str, unique_id: str):
 # TikTok
 # ------------------------------------------------------
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    status_msg = await update.message.reply_text("⏳ Downloading TikTok...")
+    status_text = await update.message.reply_text("Downloading from 🎵 TikTok...")
+    status_emoji = await update.message.reply_text("⌛")
     unique_id = str(int(time.time() * 1000))
     folder = f"tt_{unique_id}_dir"
     os.makedirs(folder, exist_ok=True)
@@ -458,16 +488,22 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
 
         if success:
             try:
-                await status_msg.delete()
+                await status_text.delete()
+                await status_emoji.delete()
             except:
                 pass
         else:
-            await status_msg.edit_text("❌ Failed to download. Make sure the link is public.")
+            try:
+                await status_text.edit_text("❌ Failed to download. Make sure the link is public.")
+                await status_emoji.delete()
+            except:
+                pass
 
     except Exception as e:
         print(f"TikTok error: {e}")
         try:
-            await status_msg.edit_text(f"❌ Failed to download TikTok.\n{str(e)[:120]}")
+            await status_text.edit_text(f"❌ Failed to download TikTok.\n{str(e)[:120]}")
+            await status_emoji.delete()
         except:
             pass
     finally:
@@ -498,6 +534,145 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
             pass
 
 # ------------------------------------------------------
+# Twitter / X
+# ------------------------------------------------------
+async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    status_text = await update.message.reply_text("Downloading from 𝕏 Twitter/X...")
+    status_emoji = await update.message.reply_text("⌛")
+    unique_id = str(int(time.time() * 1000))
+    folder = f"tw_{unique_id}_dir"
+    os.makedirs(folder, exist_ok=True)
+    paths = []
+    opened_files = []
+
+    try:
+        ydl_opts = {
+            "outtmpl": os.path.join(folder, f"tw_{unique_id}_%(id)s.%(ext)s"),
+            "format": "best",
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 40,
+            "retries": 8,
+            "fragment_retries": 8,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Referer": "https://x.com/",
+            },
+        }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if "entries" in info:
+                    for entry in info["entries"]:
+                        if entry:
+                            filename = ydl.prepare_filename(entry)
+                            base = filename.rsplit(".", 1)[0]
+                            for ext in [".mp4", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp"]:
+                                candidate = base + ext
+                                if os.path.exists(candidate):
+                                    paths.append(candidate)
+                else:
+                    filename = ydl.prepare_filename(info)
+                    base = filename.rsplit(".", 1)[0]
+                    for ext in [".mp4", ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp"]:
+                        candidate = base + ext
+                        if os.path.exists(candidate):
+                            paths.append(candidate)
+                            break
+        except Exception as e:
+            print(f"yt-dlp Twitter: {e}")
+
+        if not paths:
+            try:
+                cmd = [
+                    "gallery-dl",
+                    "--dest", folder,
+                    "--filename", "{id}_{num}.{extension}",
+                    "--no-mtime",
+                    url
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                if result.returncode == 0:
+                    for root, _, files in os.walk(folder):
+                        for f in files:
+                            full = os.path.join(root, f)
+                            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mkv", ".webm")):
+                                paths.append(full)
+            except Exception as e:
+                print(f"gallery-dl Twitter error: {e}")
+
+        images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+        videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
+
+        success = False
+
+        if images:
+            media = []
+            for p in images[:10]:
+                f = open(p, "rb")
+                opened_files.append(f)
+                media.append(InputMediaPhoto(f))
+            await update.message.reply_media_group(media=media)
+            success = True
+
+        for v in videos:
+            with open(v, "rb") as vid:
+                await update.message.reply_video(
+                    video=vid,
+                    caption="✅ Here’s your Twitter/X video",
+                    supports_streaming=True,
+                )
+            success = True
+
+        if success:
+            try:
+                await status_text.delete()
+                await status_emoji.delete()
+            except:
+                pass
+        else:
+            try:
+                await status_text.edit_text("❌ Failed to download. Make sure the link is public.")
+                await status_emoji.delete()
+            except:
+                pass
+
+    except Exception as e:
+        print(f"Twitter error: {e}")
+        try:
+            await status_text.edit_text(f"❌ Failed to download Twitter/X.\n{str(e)[:120]}")
+            await status_emoji.delete()
+        except:
+            pass
+    finally:
+        for f in opened_files:
+            try:
+                f.close()
+            except:
+                pass
+
+        if os.path.exists(folder):
+            try:
+                shutil.rmtree(folder, ignore_errors=True)
+            except:
+                pass
+
+        try:
+            for item in os.listdir("."):
+                if item.startswith(f"tw_{unique_id}") or item.startswith(f"temp_{unique_id}"):
+                    path = os.path.join(".", item)
+                    try:
+                        if os.path.isdir(path):
+                            shutil.rmtree(path, ignore_errors=True)
+                        else:
+                            os.remove(path)
+                    except:
+                        pass
+        except:
+            pass
+
+# ------------------------------------------------------
 # Text handler
 # ------------------------------------------------------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -512,7 +687,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "About this Bot:\n\n"
             "• Just send me any image or video and I will give you a modified version.\n"
             "• The changes help make the content different from the original while keeping high visual quality.\n"
-            "• You can also send any Instagram or TikTok link and I will download the media for you.\n\n"
+            "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact: @coolmoco"
         )
@@ -532,6 +707,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lower = text.lower()
 
+    # Twitter / X
+    if "twitter.com" in lower or "x.com" in lower or "t.co" in lower:
+        await download_twitter(update, context, text)
+        return
+
     # TikTok
     if "tiktok.com" in lower or "vt.tiktok.com" in lower or "vm.tiktok.com" in lower:
         await download_tiktok(update, context, text)
@@ -541,7 +721,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "instagram.com" in lower:
         clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
         clean_url = clean_url.split("?")[0].rstrip("/")
-        status_msg = await message.reply_text("⚡ Downloading from Instagram…")
+        
+        status_text = await message.reply_text("Downloading from 📸 Instagram...")
+        status_emoji = await message.reply_text("⌛")
+        
         unique_id = str(int(time.time() * 1000))
         paths = []
         try:
@@ -569,15 +752,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     with open(v, "rb") as vid:
                         await message.reply_video(video=vid, caption="✨ Instagram video", supports_streaming=True)
                 try:
-                    await status_msg.delete()
+                    await status_text.delete()
+                    await status_emoji.delete()
                 except:
                     pass
             else:
-                await status_msg.edit_text("❌ Failed. Make sure link is public.")
+                try:
+                    await status_text.edit_text("❌ Failed. Make sure link is public.")
+                    await status_emoji.delete()
+                except:
+                    pass
         except Exception as e:
             print(f"IG error: {e}")
             try:
-                await status_msg.edit_text("❌ Failed to download.")
+                await status_text.edit_text("❌ Failed to download.")
+                await status_emoji.delete()
             except:
                 pass
         finally:
@@ -600,14 +789,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
         return
 
-    await message.reply_text("❌ Only Instagram and TikTok links are supported.")
+    await message.reply_text("❌ Only 📸 Instagram, 🎵 TikTok and 𝕏 Twitter/X links are supported.")
 
 # ------------------------------------------------------
 # Main
 # ------------------------------------------------------
 def main():
     keep_alive()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(30.0)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about))
