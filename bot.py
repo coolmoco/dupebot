@@ -5,6 +5,8 @@ import time
 import re
 import subprocess
 import shutil
+import sqlite3
+from datetime import datetime, date
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
@@ -26,6 +28,126 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in .env file!")
+
+# ====================== CONFIG ======================
+ADMIN_USERNAME = "pvnuo"          # sirf yeh user admin commands use kar sakta hai
+DAILY_FREE_LIMIT = 5
+DB_FILE = "bot_data.db"
+# ====================================================
+
+# ------------------------------------------------------
+# Database
+# ------------------------------------------------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS lifetime_free (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS daily_usage (
+            user_id INTEGER,
+            usage_date TEXT,
+            count INTEGER,
+            PRIMARY KEY (user_id, usage_date)
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('global_free', '0')")
+    conn.commit()
+    conn.close()
+
+def is_global_free() -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key = 'global_free'")
+    row = c.fetchone()
+    conn.close()
+    return row and row[0] == "1"
+
+def set_global_free(enabled: bool):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('global_free', ?)", 
+              ("1" if enabled else "0",))
+    conn.commit()
+    conn.close()
+
+def is_lifetime_free(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM lifetime_free WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return bool(row)
+
+def add_lifetime_free(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO lifetime_free (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def remove_lifetime_free(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM lifetime_free WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def get_lifetime_free_list() -> list:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM lifetime_free")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def get_today_usage(user_id: int) -> int:
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT count FROM daily_usage WHERE user_id = ? AND usage_date = ?", (user_id, today))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def increment_usage(user_id: int):
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO daily_usage (user_id, usage_date, count) VALUES (?, ?, 1)
+        ON CONFLICT(user_id, usage_date) DO UPDATE SET count = count + 1
+    """, (user_id, today))
+    conn.commit()
+    conn.close()
+
+def can_use_bot(user_id: int, username: str = None) -> tuple[bool, str]:
+    if username and username.lower() == ADMIN_USERNAME.lower():
+        return True, ""
+
+    if is_global_free():
+        return True, ""
+
+    if is_lifetime_free(user_id):
+        return True, ""
+
+    used = get_today_usage(user_id)
+    if used < DAILY_FREE_LIMIT:
+        return True, ""
+
+    return False, (
+        "You have used all 5 free links for today.\n"
+        "Please try again tomorrow or contact @coolmoco for unlimited access."
+    )
 
 # ------------------------------------------------------
 # Flask keep-alive
@@ -147,6 +269,128 @@ def enhance_video(input_path: str, output_path: str) -> bool:
     except Exception as e:
         print(f"FFmpeg Exception: {e}")
         return False
+
+# ------------------------------------------------------
+# Admin Commands
+# ------------------------------------------------------
+async def freeall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
+        return
+    set_global_free(True)
+    await update.message.reply_text("✅ Bot is now FREE for everyone.")
+
+async def removefreeall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
+        return
+    set_global_free(False)
+    await update.message.reply_text("✅ Daily limit mode is now active again.")
+
+async def freeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "/freeuser @username\n"
+            "/freeuser 123456789\n\n"
+            "Note: User must have started the bot at least once."
+        )
+        return
+
+    target = context.args[0].lstrip("@")
+    try:
+        if target.isdigit():
+            target_id = int(target)
+            chat = await context.bot.get_chat(target_id)
+        else:
+            chat = await context.bot.get_chat(f"@{target}")
+            target_id = chat.id
+
+        add_lifetime_free(target_id)
+        await update.message.reply_text(f"✅ @{chat.username or target_id} now has lifetime unlimited access.")
+
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text="🎉 You now have unlimited access to this bot forever!\nEnjoy."
+            )
+        except:
+            pass
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Could not find user.\n\n"
+            f"Possible reasons:\n"
+            f"• User has never started this bot\n"
+            f"• Username is incorrect\n\n"
+            f"Solution: Ask the user to send /start to the bot first, then try again.\n"
+            f"Or use their numeric User ID."
+        )
+
+async def removefree(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage:\n"
+            "/removefree @username\n"
+            "/removefree 123456789"
+        )
+        return
+
+    target = context.args[0].lstrip("@")
+    try:
+        if target.isdigit():
+            target_id = int(target)
+            chat = await context.bot.get_chat(target_id)
+        else:
+            chat = await context.bot.get_chat(f"@{target}")
+            target_id = chat.id
+
+        remove_lifetime_free(target_id)
+        await update.message.reply_text(f"✅ Removed lifetime free from @{chat.username or target_id}")
+
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text="Your unlimited access has been removed.\nYou are now on the free daily limit (5 links per day)."
+            )
+        except:
+            pass
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Could not find user.\n\n"
+            f"User must have started the bot at least once.\n"
+            f"Try using their numeric User ID instead."
+        )
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
+        return
+
+    global_free = is_global_free()
+    free_list = get_lifetime_free_list()
+
+    text = f"📊 Bot Status\n\n"
+    text += f"Global Free Mode: {'ON ✅' if global_free else 'OFF (Daily limit active)'}\n"
+    text += f"Daily Free Limit: {DAILY_FREE_LIMIT}\n\n"
+    text += f"Lifetime Free Users ({len(free_list)}):\n"
+
+    if free_list:
+        for uid in free_list:
+            text += f"• {uid}\n"
+    else:
+        text += "None\n"
+
+    await update.message.reply_text(text)
 
 # ------------------------------------------------------
 # Commands
@@ -681,6 +925,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = message.text.strip()
+    user = update.effective_user
+    user_id = user.id if user else 0
+    username = user.username if user else None
 
     if not text.startswith("http"):
         await message.reply_text(
@@ -691,6 +938,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact: @coolmoco"
         )
+        return
+
+    # ===== LIMIT CHECK =====
+    allowed, limit_msg = can_use_bot(user_id, username)
+    if not allowed:
+        await message.reply_text(limit_msg)
         return
 
     if message.chat.type in ["group", "supergroup"]:
@@ -709,16 +962,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Twitter / X
     if "twitter.com" in lower or "x.com" in lower or "t.co" in lower:
+        increment_usage(user_id)
         await download_twitter(update, context, text)
         return
 
     # TikTok
     if "tiktok.com" in lower or "vt.tiktok.com" in lower or "vm.tiktok.com" in lower:
+        increment_usage(user_id)
         await download_tiktok(update, context, text)
         return
 
     # Instagram
     if "instagram.com" in lower:
+        increment_usage(user_id)
         clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
         clean_url = clean_url.split("?")[0].rstrip("/")
         
@@ -795,6 +1051,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Main
 # ------------------------------------------------------
 def main():
+    init_db()
     keep_alive()
     app = (
         Application.builder()
@@ -805,13 +1062,24 @@ def main():
         .pool_timeout(30.0)
         .build()
     )
+
+    # Normal commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about))
     app.add_handler(CommandHandler("how", how))
+
+    # Admin commands
+    app.add_handler(CommandHandler("freeall", freeall))
+    app.add_handler(CommandHandler("removefreeall", removefreeall))
+    app.add_handler(CommandHandler("freeuser", freeuser))
+    app.add_handler(CommandHandler("removefree", removefree))
+    app.add_handler(CommandHandler("status", status))
+
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
     print("Bot started successfully...")
     app.run_polling(drop_pending_updates=True)
 
