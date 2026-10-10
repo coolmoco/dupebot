@@ -386,7 +386,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if free_list:
         for uid in free_list:
-            text += f"• {uid}\n"
+            username_str = ""
+            try:
+                chat = await context.bot.get_chat(uid)
+                if chat.username:
+                    username_str = f" (@{chat.username})"
+                elif chat.first_name:
+                    username_str = f" ({chat.first_name})"
+            except:
+                pass
+            text += f"• {uid}{username_str}\n"
     else:
         text += "None\n"
 
