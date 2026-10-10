@@ -146,7 +146,7 @@ def can_use_bot(user_id: int, username: str = None) -> tuple[bool, str]:
 
     return False, (
         "You have used all 5 free links for today.\n"
-        "Please try again tomorrow or contact @coolmoco for unlimited access."
+        "Please try again tomorrow or contact @pvnuo for unlimited access."
     )
 
 # ------------------------------------------------------
@@ -406,7 +406,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help  - How to use\n"
         "/how   - How it works\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
-        "For any help contact: @coolmoco"
+        "For any help contact: @pvnuo"
     )
     await update.message.reply_text(text)
 
@@ -432,7 +432,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• The changes help make the content different from the original while keeping high visual quality.\n"
         "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
-        "For any help contact: @coolmoco"
+        "For any help contact: @pvnuo"
     )
     await update.message.reply_text(text)
 
@@ -936,7 +936,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• The changes help make the content different from the original while keeping high visual quality.\n"
             "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
-            "For any help contact: @coolmoco"
+            "For any help contact: @pvnuo"
         )
         return
 
