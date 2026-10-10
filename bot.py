@@ -6,15 +6,23 @@ import re
 import subprocess
 import shutil
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from threading import Thread
 from flask import Flask
 from dotenv import load_dotenv
-from telegram import Update, InputMediaPhoto
+from telegram import (
+    Update,
+    InputMediaPhoto,
+    LabeledPrice,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     MessageHandler,
     CommandHandler,
+    CallbackQueryHandler,
+    PreCheckoutQueryHandler,
     filters,
     ContextTypes,
 )
@@ -30,7 +38,7 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in .env file!")
 
 # ====================== CONFIG ======================
-ADMIN_USERNAME = "pvnuo"          # sirf yeh user admin commands use kar sakta hai
+ADMIN_USERNAME = "pvnuo"
 DAILY_FREE_LIMIT = 5
 DB_FILE = "bot_data.db"
 # ====================================================
@@ -58,6 +66,12 @@ def init_db():
             usage_date TEXT,
             count INTEGER,
             PRIMARY KEY (user_id, usage_date)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS paid_users (
+            user_id INTEGER PRIMARY KEY,
+            expiry TEXT
         )
     """)
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('global_free', '0')")
@@ -110,6 +124,44 @@ def get_lifetime_free_list() -> list:
     conn.close()
     return [r[0] for r in rows]
 
+def is_paid_user(user_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT expiry FROM paid_users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return False
+    try:
+        expiry = date.fromisoformat(row[0])
+        return expiry >= date.today()
+    except:
+        return False
+
+def add_paid_user(user_id: int, days: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT expiry FROM paid_users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    
+    if row:
+        try:
+            current_expiry = date.fromisoformat(row[0])
+            if current_expiry > date.today():
+                new_expiry = current_expiry + timedelta(days=days)
+            else:
+                new_expiry = date.today() + timedelta(days=days)
+        except:
+            new_expiry = date.today() + timedelta(days=days)
+    else:
+        new_expiry = date.today() + timedelta(days=days)
+    
+    c.execute("INSERT OR REPLACE INTO paid_users (user_id, expiry) VALUES (?, ?)", 
+              (user_id, new_expiry.isoformat()))
+    conn.commit()
+    conn.close()
+    return new_expiry
+
 def get_today_usage(user_id: int) -> int:
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_FILE)
@@ -140,13 +192,18 @@ def can_use_bot(user_id: int, username: str = None) -> tuple[bool, str]:
     if is_lifetime_free(user_id):
         return True, ""
 
+    if is_paid_user(user_id):
+        return True, ""
+
     used = get_today_usage(user_id)
     if used < DAILY_FREE_LIMIT:
         return True, ""
 
     return False, (
         "You have used all 5 free links for today.\n"
-        "Please try again tomorrow or contact @pvnuo for unlimited access."
+        "Please try again tomorrow or contact @pvnuo for unlimited access.\n\n"
+        "Or buy unlimited access:\n"
+        "👉 /buy"
     )
 
 # ------------------------------------------------------
@@ -402,6 +459,81 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 # ------------------------------------------------------
+# Buy / Payment
+# ------------------------------------------------------
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("30 Days Unlimited — 79 ⭐", callback_data="buy_30")],
+        [InlineKeyboardButton("3 Months Unlimited — 249 ⭐", callback_data="buy_90")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "💎 Choose a plan:\n\n"
+        "• 30 Days Unlimited Access → 79 Stars\n"
+        "• 3 Months Unlimited Access → 249 Stars\n\n"
+        "After payment you will get instant unlimited access.",
+        reply_markup=reply_markup
+    )
+
+async def buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user_id = query.from_user.id
+    
+    if data == "buy_30":
+        title = "30 Days Unlimited Access"
+        description = "Get unlimited downloads for 30 days"
+        payload = "plan_30"
+        prices = [LabeledPrice("30 Days Unlimited", 79)]
+        days = 30
+    elif data == "buy_90":
+        title = "3 Months Unlimited Access"
+        description = "Get unlimited downloads for 90 days"
+        payload = "plan_90"
+        prices = [LabeledPrice("3 Months Unlimited", 249)]
+        days = 90
+    else:
+        return
+    
+    await context.bot.send_invoice(
+        chat_id=user_id,
+        title=title,
+        description=description,
+        payload=payload,
+        provider_token="",
+        currency="XTR",
+        prices=prices,
+        start_parameter="buy"
+    )
+
+async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.message.successful_payment
+    user_id = update.effective_user.id
+    payload = payment.invoice_payload
+    
+    if payload == "plan_30":
+        days = 30
+    elif payload == "plan_90":
+        days = 90
+    else:
+        days = 30
+    
+    expiry = add_paid_user(user_id, days)
+    
+    await update.message.reply_text(
+        f"✅ Payment successful!\n\n"
+        f"You now have unlimited access until {expiry.strftime('%d %b %Y')}.\n"
+        f"Enjoy the bot!"
+    )
+
+# ------------------------------------------------------
 # Commands
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,7 +545,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/about - More information about this bot\n"
         "/help  - How to use\n"
-        "/how   - How it works\n\n"
+        "/how   - How it works\n"
+        "/buy   - Buy unlimited access\n\n"
         "In groups: You must mention me with the photo, video or link.\n\n"
         "For any help contact: @pvnuo"
     )
@@ -425,7 +558,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start  – Start the bot\n"
         "/help   – Show this help\n"
         "/about  – About this bot\n"
-        "/how    – How it works\n\n"
+        "/how    – How it works\n"
+        "/buy    – Buy unlimited access\n\n"
         "How to use:\n"
         "• Send any photo → get a unique modified version\n"
         "• Send any video → get a unique high-quality version\n"
@@ -1077,6 +1211,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about))
     app.add_handler(CommandHandler("how", how))
+    app.add_handler(CommandHandler("buy", buy))
 
     # Admin commands
     app.add_handler(CommandHandler("freeall", freeall))
@@ -1084,6 +1219,11 @@ def main():
     app.add_handler(CommandHandler("freeuser", freeuser))
     app.add_handler(CommandHandler("removefree", removefree))
     app.add_handler(CommandHandler("status", status))
+
+    # Payment handlers
+    app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_"))
+    app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
