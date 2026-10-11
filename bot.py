@@ -472,7 +472,12 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 Choose a plan:\n\n"
         "• 30 Days Unlimited Access → 79 Stars\n"
         "• 3 Months Unlimited Access → 249 Stars\n\n"
-        "After payment you will get instant unlimited access.",
+        "———————————————\n"
+        "Or pay manually:\n\n"
+        "PayPal: ppueruo@gmail.com\n"
+        "USDT (TRC20): TDNHdkaW2MvEMNkEGjoqTUnHk42SnXJWM4\n\n"
+        "After payment, send the screenshot to @pvnuo\n"
+        "Then you will get unlimited access.",
         reply_markup=reply_markup
     )
 
