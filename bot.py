@@ -276,26 +276,22 @@ def enhance_image(image: Image.Image) -> Image.Image:
     return clean
 
 # ------------------------------------------------------
-# Video enhance (strong + no content loss)
+# Video enhance (safe + strong + no content loss)
 # ------------------------------------------------------
 def enhance_video(input_path: str, output_path: str) -> bool:
-    vf = (
-        "eq=brightness=0.015:contrast=1.04:saturation=1.05,"
-        "unsharp=4:4:0.9:4:4:0.5,"
-        "format=yuv420p"
-    )
+    # Safe reliable pipeline
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
         "-map_metadata", "-1",
-        "-vf", vf,
         "-c:v", "libx264",
         "-preset", "medium",
-        "-crf", "16",
+        "-crf", "17",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
         "-pix_fmt", "yuv420p",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
         output_path
     ]
     try:
@@ -308,9 +304,9 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         )
         if result.returncode != 0:
             print("===== FFMPEG ERROR =====")
-            print(result.stderr[-1500:] if result.stderr else "No stderr")
+            print(result.stderr[-2000:] if result.stderr else "No stderr")
             return False
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 20000
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
     except Exception as e:
         print(f"FFmpeg Exception: {e}")
         return False
@@ -523,7 +519,7 @@ def get_user_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ------------------------------------------------------
-# Commands (with custom emojis)
+# Commands
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_parts = []
@@ -557,6 +553,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_text(" TikTok or ")
     add_custom("6203873525116183636")
     add_text(" Twitter/X link and I will download it in original quality.\n\n")
+    add_text("🚨 Note: No tool can completely remove AI signatures from every file. Results vary by platform and content, but this bot works well on many images & videos.\n\n")
     add_text("In groups: mention me with the photo, video or link.\n\n")
     add_text("For any help contact @pvnuo ")
     add_custom("6201528571756815592")
@@ -686,6 +683,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply = True
         if not mentioned and not is_reply:
             return
+
+    status_msg = await message.reply_text("⌛")
     start_time = time.time()
     try:
         if message.photo:
@@ -693,6 +692,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif message.document and message.document.mime_type and "image" in message.document.mime_type:
             file = await context.bot.get_file(message.document.file_id)
         else:
+            await status_msg.delete()
             return
         image_bytes = await file.download_as_bytearray()
         image = Image.open(io.BytesIO(image_bytes))
@@ -706,9 +706,16 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=output,
             caption=f"✅ Unique version ready\n⏱ {elapsed}s | Quality: {quality}",
         )
+        try:
+            await status_msg.delete()
+        except:
+            pass
     except Exception as e:
         print(f"Image error: {e}")
-        await message.reply_text("❌ Failed to process the image.")
+        try:
+            await status_msg.edit_text("❌ Failed to process the image.")
+        except:
+            await message.reply_text("❌ Failed to process the image.")
 
 # ------------------------------------------------------
 # Video handler
@@ -729,12 +736,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply = True
         if not mentioned and not is_reply:
             return
-    status_msg = None
+
+    status_msg = await message.reply_text("⌛")
     unique_id = str(int(time.time() * 1000))
     input_path = f"input_{unique_id}.mp4"
     output_path = f"output_{unique_id}.mp4"
     try:
-        status_msg = await message.reply_text("⏳ Processing video... (30-40 sec)")
         if message.video:
             file = await context.bot.get_file(message.video.file_id)
         elif message.document and message.document.mime_type and "video" in message.document.mime_type:
@@ -742,8 +749,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await status_msg.edit_text("❌ Unsupported video format.")
             return
+
         await file.download_to_drive(input_path)
         success = enhance_video(input_path, output_path)
+
         if success and os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
             if file_size > 48 * 1024 * 1024:
@@ -755,36 +764,28 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     compressed
                 ]
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-                if os.path.exists(compressed) and os.path.getsize(compressed) > 20000:
+                if os.path.exists(compressed) and os.path.getsize(compressed) > 10000:
                     os.remove(output_path)
                     output_path = compressed
+
+            with open(output_path, "rb") as vid:
+                await message.reply_video(
+                    video=vid,
+                    caption="✅ Here’s your modified video",
+                    supports_streaming=True,
+                )
             try:
-                with open(output_path, "rb") as vid:
-                    await message.reply_video(
-                        video=vid,
-                        caption="✅ Here’s your modified video",
-                        supports_streaming=True,
-                    )
-                try:
-                    await status_msg.delete()
-                except:
-                    pass
-            except Exception as send_err:
-                err_str = str(send_err).lower()
-                if "413" in err_str or "too large" in err_str or "entity too large" in err_str:
-                    await status_msg.edit_text("❌ Video too large after processing (Telegram 50MB limit).")
-                else:
-                    await status_msg.edit_text("❌ Failed to send the video.")
-                    print(f"Send error: {send_err}")
+                await status_msg.delete()
+            except:
+                pass
         else:
             await status_msg.edit_text("❌ Failed to process the video.")
     except Exception as e:
         print(f"Video error: {e}")
-        if status_msg:
-            try:
-                await status_msg.edit_text("❌ Failed to process the video.")
-            except:
-                pass
+        try:
+            await status_msg.edit_text("❌ Failed to process the video.")
+        except:
+            pass
     finally:
         for p in [input_path, output_path]:
             if os.path.exists(p):
