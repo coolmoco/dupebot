@@ -284,6 +284,8 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         "ffmpeg", "-y",
         "-i", input_path,
         "-map_metadata", "-1",
+        "-map", "0:v:0",
+        "-map", "0:a:0?",
         "-c:v", "libx264",
         "-preset", "medium",
         "-crf", "17",
@@ -325,6 +327,7 @@ def compress_video_if_needed(path: str, unique_id: str, max_mb: float = 45.0) ->
         out = f"comp_{unique_id}_{i}.mp4"
         cmd = [
             "ffmpeg", "-y", "-i", current,
+            "-map", "0:v:0", "-map", "0:a:0?",
             "-c:v", "libx264", "-preset", "faster", "-crf", str(crf),
             "-c:a", "aac", "-b:a", "128k",
             "-movflags", "+faststart",
@@ -1093,12 +1096,13 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
     try:
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tw_{unique_id}_%(id)s.%(ext)s"),
-            "format": "best",
+            "format": "bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]/best",
+            "merge_output_format": "mp4",
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 40,
-            "retries": 8,
-            "fragment_retries": 8,
+            "socket_timeout": 60,
+            "retries": 10,
+            "fragment_retries": 10,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Referer": "https://x.com/",
@@ -1338,16 +1342,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "outtmpl": f"ig_{unique_id}.%(ext)s",
                     "quiet": True,
                     "no_warnings": True,
-                    "format": "best",
+                    "format": "bv*+ba/b",
+                    "merge_output_format": "mp4",
+                    "postprocessors": [{
+                        "key": "FFmpegVideoConvertor",
+                        "preferedformat": "mp4",
+                    }],
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(clean_url, download=True)
                     filename = ydl.prepare_filename(info)
-                    if os.path.exists(filename):
+                    base = filename.rsplit(".", 1)[0]
+                    for ext in [".mp4", ".mkv", ".webm"]:
+                        candidate = base + ext
+                        if os.path.exists(candidate):
+                            paths.append(candidate)
+                            break
+                    if not paths and os.path.exists(filename):
                         paths = [filename]
             if paths:
                 images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
-                videos = [p for p in paths if p.lower().endswith(".mp4")]
+                videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
                 if images:
                     media = [InputMediaPhoto(open(p, "rb")) for p in images[:10]]
                     await message.reply_media_group(media=media)
