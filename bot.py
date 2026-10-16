@@ -16,6 +16,9 @@ from telegram import (
     LabeledPrice,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    MessageEntity,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from telegram.ext import (
     Application,
@@ -26,7 +29,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from PIL import Image, ImageEnhance, ImageFilter, ImageTransform
+from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 import yt_dlp
 import instaloader
@@ -185,20 +188,15 @@ def increment_usage(user_id: int):
 def can_use_bot(user_id: int, username: str = None) -> tuple[bool, str]:
     if username and username.lower() == ADMIN_USERNAME.lower():
         return True, ""
-
     if is_global_free():
         return True, ""
-
     if is_lifetime_free(user_id):
         return True, ""
-
     if is_paid_user(user_id):
         return True, ""
-
     used = get_today_usage(user_id)
     if used < DAILY_FREE_LIMIT:
         return True, ""
-
     return False, (
         "You have used all 5 free links for today.\n"
         "Please try again tomorrow or contact @pvnuo for unlimited access.\n\n"
@@ -224,88 +222,78 @@ def keep_alive():
     t.start()
 
 # ------------------------------------------------------
-# Image enhance
+# Image enhance (strong + no content loss)
 # ------------------------------------------------------
 def enhance_image(image: Image.Image) -> Image.Image:
     if image.mode != "RGB":
         image = image.convert("RGB")
-    width, height = image.size
-    crop = random.uniform(0.04, 0.08)
-    left = int(width * crop * random.uniform(0.2, 0.9))
-    top = int(height * crop * random.uniform(0.2, 0.9))
-    right = width - int(width * crop * random.uniform(0.2, 0.9))
-    bottom = height - int(height * crop * random.uniform(0.2, 0.9))
-    image = image.crop((left, top, right, bottom))
-    angle = random.uniform(-2.5, 2.5)
-    image = image.rotate(angle, resample=Image.BICUBIC, expand=False)
-    w, h = image.size
-    dx = random.uniform(-0.01, 0.01) * w
-    dy = random.uniform(-0.01, 0.01) * h
-    coeffs = ImageTransform.AffineTransform(
-        (
-            1 + random.uniform(-0.007, 0.007),
-            random.uniform(-0.005, 0.005),
-            dx,
-            random.uniform(-0.005, 0.005),
-            1 + random.uniform(-0.007, 0.007),
-            dy,
-        )
-    )
-    image = image.transform(image.size, Image.AFFINE, coeffs.data, resample=Image.BICUBIC)
-    image = ImageEnhance.Color(image).enhance(random.uniform(1.10, 1.25))
-    image = ImageEnhance.Brightness(image).enhance(random.uniform(1.02, 1.09))
-    image = ImageEnhance.Contrast(image).enhance(random.uniform(1.05, 1.15))
-    image = ImageEnhance.Sharpness(image).enhance(random.uniform(1.15, 1.40))
-    r, g, b = image.split()
-    r = r.point(lambda i: min(255, max(0, i + random.randint(-8, 9))))
-    g = g.point(lambda i: min(255, max(0, i + random.randint(-6, 7))))
-    b = b.point(lambda i: min(255, max(0, i + random.randint(-9, 8))))
-    image = Image.merge("RGB", (r, g, b))
-    arr = np.array(image).astype(np.int16)
-    noise = np.random.randint(-4, 5, arr.shape)
-    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
-    image = Image.fromarray(arr)
-    if random.random() > 0.45:
-        image = image.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.25, 0.6)))
-    image = image.filter(
-        ImageFilter.UnsharpMask(
-            radius=random.uniform(1.3, 2.0),
-            percent=random.randint(135, 180),
-            threshold=random.randint(1, 3),
-        )
-    )
-    scale = random.uniform(1.02, 1.07)
-    image = image.resize((int(image.width * scale), int(image.height * scale)), Image.LANCZOS)
-    return image
+
+    original_size = image.size
+
+    data = list(image.getdata())
+    clean = Image.new(image.mode, image.size)
+    clean.putdata(data)
+
+    angle = random.uniform(0.04, 0.12) * random.choice([-1, 1])
+    clean = clean.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False)
+    clean = clean.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=False)
+
+    w, h = clean.size
+    factor = random.uniform(0.993, 0.998)
+    clean = clean.resize((int(w * factor), int(h * factor)), Image.Resampling.LANCZOS)
+    clean = clean.resize(original_size, Image.Resampling.LANCZOS)
+
+    noise = Image.effect_noise(clean.size, random.uniform(1.0, 2.0))
+    noise = noise.convert("L")
+    noise = ImageEnhance.Brightness(noise).enhance(random.uniform(0.04, 0.09))
+    clean = Image.blend(clean, noise.convert("RGB"), random.uniform(0.02, 0.045))
+
+    r, g, b = clean.split()
+    r = ImageEnhance.Brightness(r).enhance(random.uniform(0.996, 1.004))
+    g = ImageEnhance.Brightness(g).enhance(random.uniform(0.996, 1.004))
+    b = ImageEnhance.Brightness(b).enhance(random.uniform(0.996, 1.004))
+    clean = Image.merge("RGB", (r, g, b))
+
+    clean = clean.filter(ImageFilter.UnsharpMask(
+        radius=random.uniform(0.6, 1.1),
+        percent=random.randint(60, 95),
+        threshold=2
+    ))
+
+    enhancer = ImageEnhance.Contrast(clean)
+    clean = enhancer.enhance(random.uniform(1.015, 1.05))
+
+    temp = io.BytesIO()
+    clean.save(temp, format="PNG", optimize=True)
+    temp.seek(0)
+    clean = Image.open(temp).convert("RGB")
+
+    out = io.BytesIO()
+    clean.save(out, format="JPEG", quality=96, optimize=True, progressive=True, subsampling=0)
+    out.seek(0)
+    clean = Image.open(out).convert("RGB")
+
+    return clean
 
 # ------------------------------------------------------
-# Video enhance
+# Video enhance (strong + no content loss)
 # ------------------------------------------------------
 def enhance_video(input_path: str, output_path: str) -> bool:
-    brightness = random.uniform(-0.05, 0.07)
-    contrast = random.uniform(1.07, 1.16)
-    saturation = random.uniform(1.10, 1.22)
-    gamma = random.uniform(0.94, 1.07)
-    hue = random.uniform(-5, 5)
-    noise_str = random.randint(5, 11)
-    crop_pct = random.uniform(0.012, 0.022)
     vf = (
-        f"crop=iw*(1-{crop_pct}):ih*(1-{crop_pct}),"
-        f"scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-        f"eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma},"
-        f"hue=h={hue},"
-        f"noise=alls={noise_str}:allf=t,"
-        f"unsharp=5:5:1.3:5:5:0.6,"
-        f"format=yuv420p"
+        "eq=brightness=0.015:contrast=1.04:saturation=1.05,"
+        "unsharp=4:4:0.9:4:4:0.5,"
+        "format=yuv420p"
     )
     cmd = [
         "ffmpeg", "-y",
         "-i", input_path,
+        "-map_metadata", "-1",
         "-vf", vf,
         "-c:v", "libx264",
-        "-preset", "faster",
-        "-crf", "18",
-        "-c:a", "copy",
+        "-preset", "medium",
+        "-crf", "16",
+        "-c:a", "aac",
+        "-b:a", "192k",
         "-movflags", "+faststart",
         "-pix_fmt", "yuv420p",
         output_path
@@ -348,7 +336,6 @@ async def freeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
         return
-
     if not context.args:
         await update.message.reply_text(
             "Usage:\n"
@@ -357,7 +344,6 @@ async def freeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Note: User must have started the bot at least once."
         )
         return
-
     target = context.args[0].lstrip("@")
     try:
         if target.isdigit():
@@ -366,10 +352,8 @@ async def freeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             chat = await context.bot.get_chat(f"@{target}")
             target_id = chat.id
-
         add_lifetime_free(target_id)
         await update.message.reply_text(f"✅ @{chat.username or target_id} now has lifetime unlimited access.")
-
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -377,7 +361,6 @@ async def freeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
-
     except Exception as e:
         await update.message.reply_text(
             f"❌ Could not find user.\n\n"
@@ -392,7 +375,6 @@ async def removefree(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
         return
-
     if not context.args:
         await update.message.reply_text(
             "Usage:\n"
@@ -400,7 +382,6 @@ async def removefree(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/removefree 123456789"
         )
         return
-
     target = context.args[0].lstrip("@")
     try:
         if target.isdigit():
@@ -409,10 +390,8 @@ async def removefree(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             chat = await context.bot.get_chat(f"@{target}")
             target_id = chat.id
-
         remove_lifetime_free(target_id)
         await update.message.reply_text(f"✅ Removed lifetime free from @{chat.username or target_id}")
-
         try:
             await context.bot.send_message(
                 chat_id=target_id,
@@ -420,7 +399,6 @@ async def removefree(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
-
     except Exception as e:
         await update.message.reply_text(
             f"❌ Could not find user.\n\n"
@@ -432,15 +410,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or (user.username or "").lower() != ADMIN_USERNAME.lower():
         return
-
     global_free = is_global_free()
     free_list = get_lifetime_free_list()
-
     text = f"📊 Bot Status\n\n"
     text += f"Global Free Mode: {'ON ✅' if global_free else 'OFF (Daily limit active)'}\n"
     text += f"Daily Free Limit: {DAILY_FREE_LIMIT}\n\n"
     text += f"Lifetime Free Users ({len(free_list)}):\n"
-
     if free_list:
         for uid in free_list:
             username_str = ""
@@ -455,7 +430,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"• {uid}{username_str}\n"
     else:
         text += "None\n"
-
     await update.message.reply_text(text)
 
 # ------------------------------------------------------
@@ -473,11 +447,11 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 30 Days Unlimited Access → 79 Stars\n"
         "• 3 Months Unlimited Access → 249 Stars\n\n"
         "———————————————\n"
-        "Or pay manually:\n\n"
-        "PayPal: ppueruo@gmail.com\n"
+        "Or pay with crypto:\n\n"
         "USDT (TRC20): TDNHdkaW2MvEMNkEGjoqTUnHk42SnXJWM4\n\n"
         "After payment, send the screenshot to @pvnuo\n"
-        "Then you will get unlimited access.",
+        "Then you will get unlimited access.\n\n"
+        "For any help contact @pvnuo",
         reply_markup=reply_markup
     )
 
@@ -539,69 +513,159 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 # ------------------------------------------------------
-# Commands
+# Keyboard
+# ------------------------------------------------------
+def get_user_keyboard():
+    keyboard = [
+        [KeyboardButton("How to use"), KeyboardButton("About")],
+        [KeyboardButton("Buy"), KeyboardButton("Help")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ------------------------------------------------------
+# Commands (with custom emojis)
 # ------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "Welcome!\n\n"
-        "Just send me any image or video and I will give you a modified version.\n"
-        "The changes help make the content different from the original while keeping high visual quality.\n\n"
-        "You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download it for you in original quality.\n\n"
-        "Commands:\n"
-        "/about - More information about this bot\n"
-        "/help  - How to use\n"
-        "/how   - How it works\n"
-        "/buy   - Buy unlimited access\n\n"
-        "In groups: You must mention me with the photo, video or link.\n\n"
-        "For any help contact: @pvnuo"
-    )
-    await update.message.reply_text(text)
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def add_text(s: str):
+        nonlocal current_offset
+        text_parts.append(s)
+        current_offset += len(s.encode("utf-16-le")) // 2
+
+    def add_custom(emoji_id: str, placeholder: str = "🔥"):
+        nonlocal current_offset
+        text_parts.append(placeholder)
+        length = len(placeholder.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntity.CUSTOM_EMOJI,
+            offset=current_offset,
+            length=length,
+            custom_emoji_id=str(emoji_id)
+        ))
+        current_offset += length
+
+    add_text("Welcome!\n\n")
+    add_text("Send any image or video and I will clean it for you.\n")
+    add_text("This helps remove AI labels and reduces the chance of unoriginal content strikes when you repost.\n\n")
+    add_text("You can also send any ")
+    add_custom("6201514939530618666")
+    add_text(" Instagram, ")
+    add_custom("6204008550298033491")
+    add_text(" TikTok or ")
+    add_custom("6203873525116183636")
+    add_text(" Twitter/X link and I will download it in original quality.\n\n")
+    add_text("In groups: mention me with the photo, video or link.\n\n")
+    add_text("For any help contact @pvnuo ")
+    add_custom("6201528571756815592")
+
+    text = "".join(text_parts)
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "Available Commands:\n\n"
-        "/start  – Start the bot\n"
-        "/help   – Show this help\n"
-        "/about  – About this bot\n"
-        "/how    – How it works\n"
-        "/buy    – Buy unlimited access\n\n"
-        "How to use:\n"
-        "• Send any photo → get a unique modified version\n"
-        "• Send any video → get a unique high-quality version\n"
-        "• Send 📸 Instagram / 🎵 TikTok / 𝕏 Twitter/X link → download media in original quality\n\n"
-        "In groups: mention me with the photo, video or link."
-    )
-    await update.message.reply_text(text)
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def add_text(s: str):
+        nonlocal current_offset
+        text_parts.append(s)
+        current_offset += len(s.encode("utf-16-le")) // 2
+
+    def add_custom(emoji_id: str, placeholder: str = "🔥"):
+        nonlocal current_offset
+        text_parts.append(placeholder)
+        length = len(placeholder.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntity.CUSTOM_EMOJI,
+            offset=current_offset,
+            length=length,
+            custom_emoji_id=str(emoji_id)
+        ))
+        current_offset += length
+
+    add_text("Available Commands:\n\n")
+    add_text("/start  – Start the bot\n")
+    add_text("/help   – Show this help\n")
+    add_text("/about  – About this bot\n")
+    add_text("/how    – How it works\n")
+    add_text("/buy    – Buy unlimited access\n\n")
+    add_text("How to use:\n")
+    add_text("• Send any photo → get a unique cleaned version\n")
+    add_text("• Send any video → get a unique high-quality version\n")
+    add_text("• Send ")
+    add_custom("6201514939530618666")
+    add_text(" Instagram / ")
+    add_custom("6204008550298033491")
+    add_text(" TikTok / ")
+    add_custom("6203873525116183636")
+    add_text(" Twitter/X link → download media in original quality\n\n")
+    add_text("In groups: mention me with the photo, video or link.\n\n")
+    add_text("For any help contact @pvnuo")
+
+    text = "".join(text_parts)
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "About this Bot:\n\n"
-        "• Just send me any image or video and I will give you a modified version.\n"
-        "• The changes help make the content different from the original while keeping high visual quality.\n"
-        "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
-        "In groups: You must mention me with the photo, video or link.\n\n"
-        "For any help contact: @pvnuo"
-    )
-    await update.message.reply_text(text)
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def add_text(s: str):
+        nonlocal current_offset
+        text_parts.append(s)
+        current_offset += len(s.encode("utf-16-le")) // 2
+
+    def add_custom(emoji_id: str, placeholder: str = "🔥"):
+        nonlocal current_offset
+        text_parts.append(placeholder)
+        length = len(placeholder.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntity.CUSTOM_EMOJI,
+            offset=current_offset,
+            length=length,
+            custom_emoji_id=str(emoji_id)
+        ))
+        current_offset += length
+
+    add_text("About this Bot:\n\n")
+    add_text("• Send any image or video and get a cleaned unique version (no content loss).\n")
+    add_text("• Helps reduce AI labels and unoriginal content strikes while keeping high quality.\n")
+    add_text("• You can also send any ")
+    add_custom("6201514939530618666")
+    add_text(" Instagram, ")
+    add_custom("6204008550298033491")
+    add_text(" TikTok or ")
+    add_custom("6203873525116183636")
+    add_text(" Twitter/X link and I will download the media in original quality.\n\n")
+    add_text("In groups: mention me with the photo, video or link.\n\n")
+    add_text("For any help contact @pvnuo ")
+    add_custom("6201528571756815592")
+
+    text = "".join(text_parts)
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
 
 async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "How it works:\n\n"
         "Photo mode:\n"
         "1. You send a photo\n"
-        "2. I apply unique modifications\n"
-        "3. You get a new version\n\n"
+        "2. I apply light unique modifications (no crop)\n"
+        "3. You get a new high-quality version\n\n"
         "Video mode:\n"
         "1. You send a video\n"
-        "2. I apply unique changes (light crop, color, noise, sharpen)\n"
+        "2. I apply light unique changes (no crop)\n"
         "3. You get a high-quality unique version\n\n"
-        "Link mode (📸 Instagram / 🎵 TikTok / 𝕏 Twitter/X):\n"
+        "Link mode (Instagram / TikTok / Twitter/X):\n"
         "1. You send a link\n"
         "2. I download the media in original quality\n"
         "3. You receive it\n\n"
-        "In groups: always mention me."
+        "In groups: always mention me.\n\n"
+        "For any help contact @pvnuo"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, reply_markup=get_user_keyboard())
 
 # ------------------------------------------------------
 # Image handler
@@ -610,7 +674,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
         return
-
     if message.chat.type in ["group", "supergroup"]:
         bot_username = (await context.bot.get_me()).username.lower()
         caption = (message.caption or "").lower()
@@ -623,7 +686,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply = True
         if not mentioned and not is_reply:
             return
-
     start_time = time.time()
     try:
         if message.photo:
@@ -632,16 +694,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file = await context.bot.get_file(message.document.file_id)
         else:
             return
-
         image_bytes = await file.download_as_bytearray()
         image = Image.open(io.BytesIO(image_bytes))
         result = enhance_image(image)
-
         output = io.BytesIO()
-        quality = random.randint(93, 97)
+        quality = random.randint(95, 97)
         result.save(output, format="JPEG", quality=quality, optimize=True, progressive=True, subsampling=0)
         output.seek(0)
-
         elapsed = round(time.time() - start_time, 2)
         await message.reply_photo(
             photo=output,
@@ -658,7 +717,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
         return
-
     if message.chat.type in ["group", "supergroup"]:
         bot_username = (await context.bot.get_me()).username.lower()
         caption = (message.caption or "").lower()
@@ -671,15 +729,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply = True
         if not mentioned and not is_reply:
             return
-
     status_msg = None
     unique_id = str(int(time.time() * 1000))
     input_path = f"input_{unique_id}.mp4"
     output_path = f"output_{unique_id}.mp4"
-
     try:
         status_msg = await message.reply_text("⏳ Processing video... (30-40 sec)")
-
         if message.video:
             file = await context.bot.get_file(message.video.file_id)
         elif message.document and message.document.mime_type and "video" in message.document.mime_type:
@@ -687,13 +742,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await status_msg.edit_text("❌ Unsupported video format.")
             return
-
         await file.download_to_drive(input_path)
         success = enhance_video(input_path, output_path)
-
         if success and os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
-
             if file_size > 48 * 1024 * 1024:
                 compressed = f"compressed_{unique_id}.mp4"
                 cmd = [
@@ -706,7 +758,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if os.path.exists(compressed) and os.path.getsize(compressed) > 20000:
                     os.remove(output_path)
                     output_path = compressed
-
             try:
                 with open(output_path, "rb") as vid:
                     await message.reply_video(
@@ -793,14 +844,39 @@ def download_instagram(url: str, unique_id: str):
 # TikTok
 # ------------------------------------------------------
 async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    status_text = await update.message.reply_text("Downloading from 🎵 TikTok...")
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def add_text(s: str):
+        nonlocal current_offset
+        text_parts.append(s)
+        current_offset += len(s.encode("utf-16-le")) // 2
+
+    def add_custom(emoji_id: str, placeholder: str = "🔥"):
+        nonlocal current_offset
+        text_parts.append(placeholder)
+        length = len(placeholder.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntity.CUSTOM_EMOJI,
+            offset=current_offset,
+            length=length,
+            custom_emoji_id=str(emoji_id)
+        ))
+        current_offset += length
+
+    add_text("Downloading from ")
+    add_custom("6204008550298033491")
+    add_text(" TikTok...")
+
+    status_text = await update.message.reply_text("".join(text_parts), entities=entities)
     status_emoji = await update.message.reply_text("⌛")
+
     unique_id = str(int(time.time() * 1000))
     folder = f"tt_{unique_id}_dir"
     os.makedirs(folder, exist_ok=True)
     paths = []
     opened_files = []
-
     try:
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tt_{unique_id}.%(ext)s"),
@@ -815,7 +891,6 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                 "Referer": "https://www.tiktok.com/",
             },
         }
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -828,7 +903,6 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                         break
         except Exception as e:
             print(f"yt-dlp TikTok: {e}")
-
         has_video = any(p.lower().endswith((".mp4", ".mkv", ".webm")) for p in paths)
         if not has_video:
             try:
@@ -848,13 +922,10 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                                 paths.append(full)
             except Exception as e:
                 print(f"gallery-dl error: {e}")
-
         images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
         videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
         audios = [p for p in paths if p.lower().endswith((".mp3", ".m4a"))]
-
         success = False
-
         if images:
             media = []
             for p in images[:10]:
@@ -863,7 +934,6 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                 media.append(InputMediaPhoto(f))
             await update.message.reply_media_group(media=media)
             success = True
-
         for v in videos:
             with open(v, "rb") as vid:
                 await update.message.reply_video(
@@ -872,12 +942,10 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                     supports_streaming=True,
                 )
             success = True
-
         if not success and audios:
             with open(audios[0], "rb") as a:
                 await update.message.reply_audio(audio=a, caption="🎵 TikTok audio")
             success = True
-
         if success:
             try:
                 await status_text.delete()
@@ -890,7 +958,6 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                 await status_emoji.delete()
             except:
                 pass
-
     except Exception as e:
         print(f"TikTok error: {e}")
         try:
@@ -904,13 +971,11 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
                 f.close()
             except:
                 pass
-
         if os.path.exists(folder):
             try:
                 shutil.rmtree(folder, ignore_errors=True)
             except:
                 pass
-
         try:
             for item in os.listdir("."):
                 if item.startswith(f"tt_{unique_id}") or item.startswith(f"temp_{unique_id}"):
@@ -929,14 +994,39 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
 # Twitter / X
 # ------------------------------------------------------
 async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    status_text = await update.message.reply_text("Downloading from 𝕏 Twitter/X...")
+    text_parts = []
+    entities = []
+    current_offset = 0
+
+    def add_text(s: str):
+        nonlocal current_offset
+        text_parts.append(s)
+        current_offset += len(s.encode("utf-16-le")) // 2
+
+    def add_custom(emoji_id: str, placeholder: str = "🔥"):
+        nonlocal current_offset
+        text_parts.append(placeholder)
+        length = len(placeholder.encode("utf-16-le")) // 2
+        entities.append(MessageEntity(
+            type=MessageEntity.CUSTOM_EMOJI,
+            offset=current_offset,
+            length=length,
+            custom_emoji_id=str(emoji_id)
+        ))
+        current_offset += length
+
+    add_text("Downloading from ")
+    add_custom("6203873525116183636")
+    add_text(" Twitter/X...")
+
+    status_text = await update.message.reply_text("".join(text_parts), entities=entities)
     status_emoji = await update.message.reply_text("⌛")
+
     unique_id = str(int(time.time() * 1000))
     folder = f"tw_{unique_id}_dir"
     os.makedirs(folder, exist_ok=True)
     paths = []
     opened_files = []
-
     try:
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tw_{unique_id}_%(id)s.%(ext)s"),
@@ -951,7 +1041,6 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                 "Referer": "https://x.com/",
             },
         }
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
@@ -974,7 +1063,6 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                             break
         except Exception as e:
             print(f"yt-dlp Twitter: {e}")
-
         if not paths:
             try:
                 cmd = [
@@ -993,12 +1081,9 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                                 paths.append(full)
             except Exception as e:
                 print(f"gallery-dl Twitter error: {e}")
-
         images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
         videos = [p for p in paths if p.lower().endswith((".mp4", ".mkv", ".webm"))]
-
         success = False
-
         if images:
             media = []
             for p in images[:10]:
@@ -1007,7 +1092,6 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                 media.append(InputMediaPhoto(f))
             await update.message.reply_media_group(media=media)
             success = True
-
         for v in videos:
             with open(v, "rb") as vid:
                 await update.message.reply_video(
@@ -1016,7 +1100,6 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                     supports_streaming=True,
                 )
             success = True
-
         if success:
             try:
                 await status_text.delete()
@@ -1029,7 +1112,6 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                 await status_emoji.delete()
             except:
                 pass
-
     except Exception as e:
         print(f"Twitter error: {e}")
         try:
@@ -1043,13 +1125,11 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
                 f.close()
             except:
                 pass
-
         if os.path.exists(folder):
             try:
                 shutil.rmtree(folder, ignore_errors=True)
             except:
                 pass
-
         try:
             for item in os.listdir("."):
                 if item.startswith(f"tw_{unique_id}") or item.startswith(f"temp_{unique_id}"):
@@ -1071,20 +1151,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
         return
-
     text = message.text.strip()
     user = update.effective_user
     user_id = user.id if user else 0
     username = user.username if user else None
 
+    # Keyboard button handling
+    if text == "How to use":
+        await how(update, context)
+        return
+    if text == "About":
+        await about(update, context)
+        return
+    if text == "Buy":
+        await buy(update, context)
+        return
+    if text == "Help":
+        await help_command(update, context)
+        return
+
     if not text.startswith("http"):
         await message.reply_text(
             "About this Bot:\n\n"
-            "• Just send me any image or video and I will give you a modified version.\n"
-            "• The changes help make the content different from the original while keeping high visual quality.\n"
-            "• You can also send any 📸 Instagram, 🎵 TikTok or 𝕏 Twitter/X link and I will download the media for you in original quality.\n\n"
+            "• Just send me any image or video and I will give you a cleaned unique version.\n"
+            "• The changes help reduce AI labels and unoriginal content strikes while keeping high visual quality.\n"
+            "• You can also send any Instagram, TikTok or Twitter/X link and I will download the media for you in original quality.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
-            "For any help contact: @pvnuo"
+            "For any help contact @pvnuo",
+            reply_markup=get_user_keyboard()
         )
         return
 
@@ -1093,7 +1187,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed:
         await message.reply_text(limit_msg)
         return
-
     if message.chat.type in ["group", "supergroup"]:
         bot_username = (await context.bot.get_me()).username.lower()
         mentioned = f"@{bot_username}" in text.lower()
@@ -1105,28 +1198,49 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply = True
         if not mentioned and not is_reply:
             return
-
     lower = text.lower()
-
     # Twitter / X
     if "twitter.com" in lower or "x.com" in lower or "t.co" in lower:
         increment_usage(user_id)
         await download_twitter(update, context, text)
         return
-
     # TikTok
     if "tiktok.com" in lower or "vt.tiktok.com" in lower or "vm.tiktok.com" in lower:
         increment_usage(user_id)
         await download_tiktok(update, context, text)
         return
-
     # Instagram
     if "instagram.com" in lower:
         increment_usage(user_id)
         clean_url = re.sub(r"[?&](utm_|igshid|stkn|igsh)=[^&]+", "", text)
         clean_url = clean_url.split("?")[0].rstrip("/")
         
-        status_text = await message.reply_text("Downloading from 📸 Instagram...")
+        text_parts = []
+        entities = []
+        current_offset = 0
+
+        def add_text(s: str):
+            nonlocal current_offset
+            text_parts.append(s)
+            current_offset += len(s.encode("utf-16-le")) // 2
+
+        def add_custom(emoji_id: str, placeholder: str = "🔥"):
+            nonlocal current_offset
+            text_parts.append(placeholder)
+            length = len(placeholder.encode("utf-16-le")) // 2
+            entities.append(MessageEntity(
+                type=MessageEntity.CUSTOM_EMOJI,
+                offset=current_offset,
+                length=length,
+                custom_emoji_id=str(emoji_id)
+            ))
+            current_offset += length
+
+        add_text("Downloading from ")
+        add_custom("6201514939530618666")
+        add_text(" Instagram...")
+
+        status_text = await message.reply_text("".join(text_parts), entities=entities)
         status_emoji = await message.reply_text("⌛")
         
         unique_id = str(int(time.time() * 1000))
@@ -1145,7 +1259,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     filename = ydl.prepare_filename(info)
                     if os.path.exists(filename):
                         paths = [filename]
-
             if paths:
                 images = [p for p in paths if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
                 videos = [p for p in paths if p.lower().endswith(".mp4")]
@@ -1192,7 +1305,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
         return
-
     await message.reply_text("❌ Only 📸 Instagram, 🎵 TikTok and 𝕏 Twitter/X links are supported.")
 
 # ------------------------------------------------------
@@ -1210,30 +1322,25 @@ def main():
         .pool_timeout(30.0)
         .build()
     )
-
     # Normal commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("about", about))
     app.add_handler(CommandHandler("how", how))
     app.add_handler(CommandHandler("buy", buy))
-
     # Admin commands
     app.add_handler(CommandHandler("freeall", freeall))
     app.add_handler(CommandHandler("removefreeall", removefreeall))
     app.add_handler(CommandHandler("freeuser", freeuser))
     app.add_handler(CommandHandler("removefree", removefree))
     app.add_handler(CommandHandler("status", status))
-
     # Payment handlers
     app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_"))
     app.add_handler(PreCheckoutQueryHandler(precheckout_callback))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
-
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
     print("Bot started successfully...")
     app.run_polling(drop_pending_updates=True)
 
