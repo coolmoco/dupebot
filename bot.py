@@ -584,11 +584,15 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ------------------------------------------------------
 # Keyboard
 # ------------------------------------------------------
-def get_user_keyboard():
+def get_user_keyboard(username: str = None):
     keyboard = [
         [KeyboardButton("How to use"), KeyboardButton("About")],
         [KeyboardButton("Buy"), KeyboardButton("Help")],
     ]
+    if username and username.lower() == ADMIN_USERNAME.lower():
+        keyboard.append([KeyboardButton("Status"), KeyboardButton("Free All")])
+        keyboard.append([KeyboardButton("Remove Free All"), KeyboardButton("Free User")])
+        keyboard.append([KeyboardButton("Remove Free")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ------------------------------------------------------
@@ -632,7 +636,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_custom("6201528571756815592")
 
     text = "".join(text_parts)
-    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard(update.effective_user.username if update.effective_user else None))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_parts = []
@@ -676,7 +680,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_text("For any help contact @pvnuo")
 
     text = "".join(text_parts)
-    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard(update.effective_user.username if update.effective_user else None))
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_parts = []
@@ -715,7 +719,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_custom("6201528571756815592")
 
     text = "".join(text_parts)
-    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard())
+    await update.message.reply_text(text, entities=entities, reply_markup=get_user_keyboard(update.effective_user.username if update.effective_user else None))
 
 async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -735,7 +739,7 @@ async def how(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "In groups: always mention me.\n\n"
         "For any help contact @pvnuo"
     )
-    await update.message.reply_text(text, reply_markup=get_user_keyboard())
+    await update.message.reply_text(text, reply_markup=get_user_keyboard(update.effective_user.username if update.effective_user else None))
 
 # ------------------------------------------------------
 # Image handler
@@ -1226,6 +1230,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "Help":
         await help_command(update, context)
         return
+    # Admin keyboard buttons (only work if already admin-checked inside handlers)
+    if text == "Status":
+        await status(update, context)
+        return
+    if text == "Free All":
+        await freeall(update, context)
+        return
+    if text == "Remove Free All":
+        await removefreeall(update, context)
+        return
+    if text == "Free User":
+        await update.message.reply_text(
+            "Usage:\n"
+            "/freeuser @username\n"
+            "/freeuser 123456789\n\n"
+            "Note: User must have started the bot at least once."
+        )
+        return
+    if text == "Remove Free":
+        await update.message.reply_text(
+            "Usage:\n"
+            "/removefree @username\n"
+            "/removefree 123456789"
+        )
+        return
 
     if not text.startswith("http"):
         await message.reply_text(
@@ -1235,7 +1264,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• You can also send any Instagram, TikTok or Twitter/X link and I will download the media for you in original quality.\n\n"
             "In groups: You must mention me with the photo, video or link.\n\n"
             "For any help contact @pvnuo",
-            reply_markup=get_user_keyboard()
+            reply_markup=get_user_keyboard(username)
         )
         return
 
