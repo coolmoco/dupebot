@@ -311,6 +311,79 @@ def enhance_video(input_path: str, output_path: str) -> bool:
         print(f"FFmpeg Exception: {e}")
         return False
 
+def compress_video_if_needed(path: str, unique_id: str, max_mb: float = 45.0) -> str:
+    """Compress until under Telegram safe limit. Returns final path."""
+    if not os.path.exists(path):
+        return path
+    size = os.path.getsize(path)
+    limit = int(max_mb * 1024 * 1024)
+    if size <= limit:
+        return path
+    crfs = [23, 26, 28, 30, 32]
+    current = path
+    for i, crf in enumerate(crfs):
+        out = f"comp_{unique_id}_{i}.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-i", current,
+            "-c:v", "libx264", "-preset", "faster", "-crf", str(crf),
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-pix_fmt", "yuv420p",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            out
+        ]
+        try:
+            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+            if r.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 10000:
+                if current != path and os.path.exists(current):
+                    try:
+                        os.remove(current)
+                    except:
+                        pass
+                current = out
+                if os.path.getsize(current) <= limit:
+                    return current
+        except Exception as e:
+            print(f"compress pass {i}: {e}")
+    return current
+
+async def safe_send_video(message, path: str, caption: str, unique_id: str):
+    """Send as video; on 413 or large file fall back to document."""
+    path = compress_video_if_needed(path, unique_id)
+    size = os.path.getsize(path) if os.path.exists(path) else 0
+    try:
+        with open(path, "rb") as vid:
+            if size > 48 * 1024 * 1024:
+                await message.reply_document(
+                    document=vid,
+                    caption=caption + " (sent as file)",
+                    filename=os.path.basename(path) or "video.mp4",
+                )
+            else:
+                await message.reply_video(
+                    video=vid,
+                    caption=caption,
+                    supports_streaming=True,
+                )
+        return True
+    except Exception as e:
+        err = str(e).lower()
+        print(f"safe_send_video error: {e}")
+        if "413" in err or "too large" in err or "entity too large" in err or "request entity" in err:
+            try:
+                path2 = compress_video_if_needed(path, unique_id + "_r", max_mb=40.0)
+                with open(path2, "rb") as vid:
+                    await message.reply_document(
+                        document=vid,
+                        caption=caption + " (sent as file)",
+                        filename=os.path.basename(path2) or "video.mp4",
+                    )
+                return True
+            except Exception as e2:
+                print(f"document fallback failed: {e2}")
+                return False
+        return False
+
 # ------------------------------------------------------
 # Admin Commands
 # ------------------------------------------------------
@@ -754,30 +827,16 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = enhance_video(input_path, output_path)
 
         if success and os.path.exists(output_path):
-            file_size = os.path.getsize(output_path)
-            if file_size > 48 * 1024 * 1024:
-                compressed = f"compressed_{unique_id}.mp4"
-                cmd = [
-                    "ffmpeg", "-y", "-i", output_path,
-                    "-c:v", "libx264", "-preset", "faster", "-crf", "23",
-                    "-c:a", "copy", "-movflags", "+faststart",
-                    compressed
-                ]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-                if os.path.exists(compressed) and os.path.getsize(compressed) > 10000:
-                    os.remove(output_path)
-                    output_path = compressed
-
-            with open(output_path, "rb") as vid:
-                await message.reply_video(
-                    video=vid,
-                    caption="✅ Here’s your modified video",
-                    supports_streaming=True,
-                )
-            try:
-                await status_msg.delete()
-            except:
-                pass
+            ok = await safe_send_video(
+                message, output_path, "✅ Here’s your modified video", unique_id
+            )
+            if ok:
+                try:
+                    await status_msg.delete()
+                except:
+                    pass
+            else:
+                await status_msg.edit_text("❌ Failed to process the video.")
         else:
             await status_msg.edit_text("❌ Failed to process the video.")
     except Exception as e:
@@ -794,7 +853,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
         for f in os.listdir("."):
-            if f.startswith(f"compressed_{unique_id}"):
+            if f.startswith(f"compressed_{unique_id}") or f.startswith(f"comp_{unique_id}"):
                 try:
                     os.remove(f)
                 except:
@@ -881,12 +940,13 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
     try:
         ydl_opts = {
             "outtmpl": os.path.join(folder, f"tt_{unique_id}.%(ext)s"),
-            "format": "best",
+            "format": "bv*[height<=1080]+ba/b[height<=1080]/best[height<=1080]/best",
+            "merge_output_format": "mp4",
             "quiet": True,
             "no_warnings": True,
-            "socket_timeout": 40,
-            "retries": 8,
-            "fragment_retries": 8,
+            "socket_timeout": 60,
+            "retries": 10,
+            "fragment_retries": 10,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Referer": "https://www.tiktok.com/",
@@ -936,13 +996,11 @@ async def download_tiktok(update: Update, context: ContextTypes.DEFAULT_TYPE, ur
             await update.message.reply_media_group(media=media)
             success = True
         for v in videos:
-            with open(v, "rb") as vid:
-                await update.message.reply_video(
-                    video=vid,
-                    caption="✅ Here’s your TikTok video",
-                    supports_streaming=True,
-                )
-            success = True
+            ok = await safe_send_video(
+                update.message, v, "✅ Here’s your TikTok video", unique_id
+            )
+            if ok:
+                success = True
         if not success and audios:
             with open(audios[0], "rb") as a:
                 await update.message.reply_audio(audio=a, caption="🎵 TikTok audio")
@@ -1094,13 +1152,11 @@ async def download_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE, u
             await update.message.reply_media_group(media=media)
             success = True
         for v in videos:
-            with open(v, "rb") as vid:
-                await update.message.reply_video(
-                    video=vid,
-                    caption="✅ Here’s your Twitter/X video",
-                    supports_streaming=True,
-                )
-            success = True
+            ok = await safe_send_video(
+                update.message, v, "✅ Here’s your Twitter/X video", unique_id
+            )
+            if ok:
+                success = True
         if success:
             try:
                 await status_text.delete()
@@ -1267,8 +1323,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     media = [InputMediaPhoto(open(p, "rb")) for p in images[:10]]
                     await message.reply_media_group(media=media)
                 for v in videos:
-                    with open(v, "rb") as vid:
-                        await message.reply_video(video=vid, caption="✨ Instagram video", supports_streaming=True)
+                    await safe_send_video(
+                        message, v, "✨ Instagram video", unique_id
+                    )
                 try:
                     await status_text.delete()
                     await status_emoji.delete()
